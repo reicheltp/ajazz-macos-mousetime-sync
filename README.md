@@ -125,11 +125,22 @@ why it re-sends every 30 seconds: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
 
 The other complaint about this mouse in wireless mode is that it sometimes
 produces input nobody asked for — System Settings opening on its own, stray
-keystrokes. **This does not address that.** Deliberately: it needs measuring
-before it needs code, and the interface inventory already contradicts part of
-the obvious explanation. See
-[docs/PROTOCOL.md](docs/PROTOCOL.md#the-phantom-input-problem) for where the
-diagnosis stands and what would settle it.
+keystrokes. **This tool does not address that yet**, but the cause is now
+identified.
+
+The receiver's second HID interface declares a consumer array spanning usages
+`0x0000`–`0x033C`, a keyboard collection accepting any keycode with any
+modifier, and a system-control collection that can request sleep or power down.
+Any corrupted 2.4 GHz packet decoded against that descriptor is a valid report,
+so the radio link occasionally types something or opens something.
+
+The useful part: **nothing you press depends on that interface.** The five
+buttons — including browser back and forward — the wheel and horizontal scroll
+are all on the mouse interface. So the offending interface can be disabled
+without losing anything.
+
+Full descriptors and the proposed fix are in
+[docs/PROTOCOL.md](docs/PROTOCOL.md#the-phantom-input-problem).
 
 ## Contributing
 

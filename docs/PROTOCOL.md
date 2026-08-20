@@ -22,12 +22,71 @@ nothing here. `mousetime` matches on neither: it looks for a product string
 containing both `AJAZZ` and `2.4G`, because product IDs also vary by model and
 firmware revision.
 
-**There is no keyboard interface.** Only mouse, vendor and consumer. This
-matters for the phantom-input question below.
+**Three interfaces is not three collections.** `PrimaryUsage` names only the
+*first* collection in an interface's report descriptor, and the second interface
+has four. Reading the three lines above and concluding "no keyboard, so no stray
+keystrokes" is wrong — an earlier revision of this document made exactly that
+mistake. What each interface can actually emit is in the descriptors below.
 
 The `*` marks what `mousetime` considers a control-channel candidate: an AJAZZ
 interface whose primary usage is not mouse, pointer, keyboard, keypad or
 consumer.
+
+## What each interface can emit
+
+Report descriptors are readable from the IO registry — the `ReportDescriptor`
+property on each `IOHIDDevice` — which needs no permission at all:
+
+```sh
+ioreg -a -c IOHIDDevice -r -l
+```
+
+### The mouse interface (71 bytes)
+
+```
+05 01 09 02 A1 01 09 01 A1 00     Generic Desktop / Mouse / Pointer
+  05 09 19 01 29 05               Button page, Usage Minimum 1, Maximum 5
+  15 00 25 01 75 01 95 05 81 02     -> 5 buttons, one bit each
+  95 03 81 01                       -> 3 bits padding
+  05 01 09 30 09 31 75 10 95 02 81 06   X, Y as 16-bit relative
+  09 38 75 08 95 01 81 06               Wheel, 8-bit relative
+  05 0C 0A 38 02 95 01 81 06            Consumer AC Pan (0x0238), horizontal scroll
+C0 C0
+```
+
+**Five buttons, and they live here.** Browser back and forward are buttons 4 and
+5 on the mouse interface — plain `Button` page usages. They do *not* go through
+the consumer interface. That answers the question that was blocking any attempt
+to filter the phantom input: nothing the user actually presses depends on the
+second interface.
+
+### The second interface (120 bytes) — four collections
+
+```
+Report ID 3   Consumer Control
+              Usage Minimum 0x0000, Usage Maximum 0x033C
+              one 16-bit array field
+Report ID 2   Generic Desktop / System Control
+              Usage Minimum 0x81, Usage Maximum 0x83
+              -> System Power Down, System Sleep, System Wake Up
+Report ID 7   Generic Desktop / Keyboard
+              modifiers 0xE0-0xE7 as an 8-bit bitmap
+              plus six 8-bit keycodes, Usage Minimum 0x00, Usage Maximum 0xFF
+Report ID 5   Vendor page 0xFFFF, three bytes
+```
+
+This is the whole phantom-input problem in one place. That interface can send:
+
+- **any consumer usage from 0 to 0x33C** — a 16-bit array field with no
+  enumeration of specific usages, so a single wrong value is a valid report.
+  `0x00E9` is Volume Up, `0x019F` opens System Settings, `0x0221` opens
+  Spotlight, `0x0192` opens Calculator.
+- **any keycode with any modifier combination**, on report ID 7. So stray
+  keystrokes are not only possible here, this is the only place they could come
+  from.
+- **system sleep and power down**, on report ID 2.
+
+A mouse with five buttons, a wheel and horizontal scroll needs none of it.
 
 ## Setting the clock
 
@@ -131,34 +190,51 @@ prompt for Input Monitoring.
 The unresolved half. In 2.4 GHz mode the receiver reportedly produces input
 nobody asked for: System Settings opening by itself, stray keystrokes.
 
-What the inventory already tells us:
+Observed symptom, with a screenshot to go by: System Settings opening on its own
+at the **Sound** pane, only while the mouse is used through the dock.
 
-- **Stray keystrokes cannot come from this receiver.** It publishes no keyboard
-  interface. There is no mechanism by which it could send a key.
-- **System Settings opening is consistent with the consumer interface.** HID
-  Consumer usage `0x019f`, "AL Control Panel", is mapped by macOS to exactly
-  that action. Radio noise decoded into a consumer report would do it. This is a
-  hypothesis, not a measurement.
-- Other consumer usages would produce symptoms that *look* like typing without
-  being typing: `0x0221` (AC Search) opens Spotlight, `0x0192` opens Calculator.
+The report descriptors above explain it, and they close the question that was
+blocking a fix.
 
-Before anything is filtered, one thing has to be known: **where the side buttons
-live.** Browser back/forward is either plain mouse buttons 4 and 5 on the mouse
-interface, or Consumer `AC Back` (`0x0224`) / `AC Forward` (`0x0225`) on the
-consumer interface. If it is the latter, the consumer interface carries traffic
-the user actually wants, and seizing it wholesale would break a working feature
-to fix an intermittent one.
+**Everything needed to produce these symptoms is on the second interface.** Its
+consumer collection is a bare 16-bit array spanning usages `0x0000`–`0x033C`,
+so any 16-bit value is a valid report; its keyboard collection accepts any
+keycode with any modifier bitmap; its system-control collection can request
+sleep or power down. A 2.4 GHz link that occasionally delivers a corrupted
+packet, decoded against that descriptor, produces arbitrary system actions and
+arbitrary keystrokes. No exotic explanation is needed.
 
-The next step is a `watch` command that logs what each interface emits without
-intercepting it — which does need Input Monitoring, since it means reading input
-devices. Then: press each side button, note the usage; leave it running until a
-phantom event occurs, note that usage. Only then is there enough to design a
-filter.
+The Sound pane specifically fits two paths, both available here: macOS opens
+Sound settings on **Option + a volume key**, which needs a modifier from report
+ID 7 plus `0x00E9`/`0x00EA` from report ID 3 — or `0x019F` ("AL Control Panel")
+opens System Settings, which restores whichever pane was last viewed. One
+screenshot does not separate the two, and it does not need to: the fix is the
+same either way.
 
-The mechanism a fix would use is `IOHIDDeviceOpen` with
-`kIOHIDOptionsTypeSeizeDevice`, which gives one process exclusive claim on an
-interface so its input never reaches the window server. The mouse interface must
-never be seized, for obvious reasons.
+**Nothing the user presses depends on that interface.** Browser back and forward
+are buttons 4 and 5 on the *mouse* interface, per its descriptor. Five buttons,
+a wheel and horizontal scroll are the entire useful surface of this mouse, and
+all of them are on the mouse interface. The second interface has no legitimate
+function for this device — which is what makes disabling it wholesale a
+proportionate fix rather than a trade-off.
+
+An earlier revision of this section argued the opposite from `PrimaryUsage`
+alone and concluded stray keystrokes could not originate here. `PrimaryUsage`
+reports one collection out of four. Descriptors, not summaries.
+
+### What a fix would do
+
+`IOHIDDeviceOpen` with `kIOHIDOptionsTypeSeizeDevice` claims an interface
+exclusively, so its input never reaches the window server. Applied to the second
+interface only; the mouse interface must never be seized, for obvious reasons.
+
+Costs to weigh before building it: seizing an input device requires Input
+Monitoring, which the clock sync deliberately avoids, so it would have to be
+opt-in and separate. It also holds the interface for as long as the process runs.
+
+Worth trying first, because it needs no code and no permission: `hidutil` can
+set a `UserKeyMapping` on a matched device to map usages to nothing. Whether it
+can cover a full 16-bit consumer array rather than individual usages is untested.
 
 ## Not implemented
 
