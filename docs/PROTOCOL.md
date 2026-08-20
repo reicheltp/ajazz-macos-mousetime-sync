@@ -94,9 +94,16 @@ A 64-byte HID **feature** report on the vendor-defined interface. Byte 0 is the
 report ID *and* the first transferred byte — the ID is passed separately to
 `IOHIDDeviceSetReport` as well.
 
+Note on the report ID: this command is sent with IOKit report ID `0x28` and a
+buffer whose byte 0 is also `0x28`, which works — but AJAZZ's own driver uses
+report ID **0** with `0x28` as the first *data* byte, and the interface declares
+no report IDs at all. The bytes on the wire are identical either way, so `0x28`
+is a command byte, not a report ID. See ``VendorChannel``, which does it the
+correct way for the newer commands.
+
 | Offset | Value | Meaning |
 |---|---|---|
-| 0 | `0x28` | report ID |
+| 0 | `0x28` | command (not a report ID — see above) |
 | 1–6 | `0x00` | padding |
 | 7 | `0xd7` | opcode: set date/time |
 | 8–9 | big endian | year (2026 = `0x07ea`) |
@@ -123,6 +130,60 @@ stopped working", with nothing in any log.
 After the dock appears on the bus, the firmware needs roughly two seconds before
 it will accept a report. Sent immediately on enumeration, it is lost — silently,
 per the above. `mousetime` waits 2.5 s.
+
+## Reading battery and identity
+
+Confirmed against the hardware. Same vendor interface as the clock, and the
+framing here was established the other way round — from AJAZZ's own web driver
+at `qmk.top`, then verified by getting sensible answers back.
+
+**Framing:** a 64-byte **feature** report under report ID **0**, command in byte
+0, reply read back from the same report with `GetReport`. Allow ~50 ms between
+write and read; AJAZZ's driver waits 10 ms and polls.
+
+| Command | Meaning | Reply |
+|---|---|---|
+| `0xf1` | identify | `f1` then a little-endian `uint16` device ID |
+| `0xf6 0x05` | subsequent status is about the **mouse** | none |
+| `0xf6 0x0a` | subsequent status is about the **keyboard** | none |
+| `0xf7` | status | see below |
+| `0xfc` | request a fresh read | none |
+
+Status reply bytes:
+
+| Byte | Meaning |
+|---|---|
+| 0 | driver's `isCanRead` flag |
+| 1 | keyboard charge, 0–100 |
+| 2 | **mouse charge, 0–100** |
+| 3 | keyboard online when `0` |
+| 4 | mouse online when `0` |
+| 5 | driver's `isCanSend` flag |
+
+Two things worth knowing, both learned the hard way:
+
+**`0xf6` first, or the mouse reads as offline.** Without selecting the device,
+byte 4 comes back `1` however plainly present the mouse is. Selecting it flips
+that to `0`.
+
+**Do not trust bytes 0 and 5 as validity flags.** Both measured false while the
+mouse was present, charging and reporting 100%. They appear to gate *relaying*
+commands on to the mouse over the radio, not the freshness of the cached battery
+value. Byte 4 (online) is the usable trust signal, and `mousetime` treats a
+reading as good only when the mouse is online and the value is 1–100 — a
+warning fired on a stale zero would be worse than none.
+
+**Reply shape is per command.** `0xf1` echoes its command byte; `0xf7` puts a
+flag there instead. A generic "the reply always echoes the command" check looks
+right and rejects every status read.
+
+An observed identify: `f1 df 06` → device ID 1759 (`0x06df`). AJAZZ's driver
+resolves that ID to a device class which then determines the *settings* command
+set — which is why report rate and DPI are not implemented here: the table
+mapping IDs to classes has not been located, and there are two mutually
+incompatible rate encodings in the bundle. Reads are proven; writes to this
+channel are where profile and firmware commands also live, so they are not
+guessed at.
 
 ## Why it re-sends every 30 seconds
 

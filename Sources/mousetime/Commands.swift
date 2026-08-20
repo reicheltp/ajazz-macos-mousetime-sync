@@ -156,10 +156,52 @@ func runSuppress(_ args: Arguments) -> Int32 {
     return failed ? 1 : 0
 }
 
+// MARK: - battery
+
+func runBattery(_ args: Arguments) -> Int32 {
+    if let bad = reportUnknown(args, known: ["test-notification", "v", "verbose"]) { return bad }
+
+    if args.has("test-notification") {
+        // The situation this feature exists for cannot be produced on demand, so
+        // there has to be a way to prove the notification path works.
+        let posted = Notifier.post(
+            title: "mousetime", subtitle: "AJAZZ AJ159 APEX",
+            body: "Test: battery would be at 5%", sound: "Submarine")
+        print(posted ? "notification posted" : "osascript refused to post")
+        return posted ? 0 : 1
+    }
+
+    do {
+        guard let (device, status) = try StatusQuery.readFirstAvailable() else {
+            print("no AJAZZ control interface attached.")
+            return 1
+        }
+        if args.has("v", "verbose") {
+            print("\(device)")
+            print("    raw: \(status.raw.map { String(format: "%02x", $0) }.joined(separator: " "))")
+        }
+        guard status.hasUsableMouseBattery else {
+            print("mouse battery: unavailable (mouse reported "
+                + "\(status.mouseOnline ? "online" : "offline"), value \(status.mouseBattery))")
+            print("the receiver answers from its own cache; wake the mouse and try again.")
+            return 1
+        }
+        print("mouse battery: \(status.mouseBattery)%")
+        if status.keyboardOnline {
+            print("keyboard battery: \(status.keyboardBattery)%")
+        }
+        return 0
+    } catch {
+        complain("\(error)")
+        return 1
+    }
+}
+
 // MARK: - daemon
 
 func runDaemon(_ args: Arguments) -> Int32 {
-    if let bad = reportUnknown(args, known: ["all", "interval", "settle", "v", "verbose", "suppress"]) {
+    if let bad = reportUnknown(args, known: ["all", "interval", "settle", "v", "verbose", "suppress", "battery",
+                 "battery-interval", "battery-thresholds"]) {
         return bad
     }
 
@@ -217,6 +259,52 @@ func runDaemon(_ args: Arguments) -> Int32 {
         }
     }
     _ = suppressionMonitor  // held for the process lifetime
+
+    // Battery warnings. Opt-in for the same reason as suppression: it polls the
+    // radio, and not every user wants notifications.
+    var batteryMonitor: BatteryMonitor?
+    if args.has("battery") {
+        var configuration = BatteryMonitor.Configuration()
+        if let text = args.value("battery-interval") {
+            guard let interval = parseDuration(text) else {
+                complain("bad --battery-interval \"\(text)\"")
+                return 2
+            }
+            configuration.interval = interval
+        }
+        if let text = args.value("battery-thresholds") {
+            let levels = text.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            guard !levels.isEmpty, levels.allSatisfy({ (1...100).contains($0) }) else {
+                complain("bad --battery-thresholds \"\(text)\"; expected something like 20,10,5")
+                return 2
+            }
+            configuration.thresholds = levels
+        }
+
+        let monitor = BatteryMonitor(configuration: configuration) { event in
+            switch event {
+            case .reading(_, let status):
+                log.note("battery    mouse at \(status.mouseBattery)%")
+            case .low(let threshold, let percent):
+                log.note("battery    LOW: \(percent)% (crossed \(threshold)%) — notifying")
+                Notifier.post(
+                    title: "Mouse battery low",
+                    subtitle: "AJAZZ AJ159 APEX",
+                    body: "\(percent)% remaining. Time to dock it.",
+                    sound: "Submarine")
+            case .unusable(let status):
+                log.note("battery    no usable reading (mouse "
+                    + "\(status.mouseOnline ? "online" : "offline"))")
+            case .failed(let message):
+                log.note("battery    FAILED: \(message)")
+            }
+        }
+        monitor.start()
+        batteryMonitor = monitor
+        log.note("battery    watching, every \(brief(configuration.interval)), "
+            + "warn at \(configuration.thresholds.map(String.init).joined(separator: "/"))%")
+    }
+    _ = batteryMonitor  // held for the process lifetime
 
     installSignalHandlers {
         print("\(stamp(Date())) stopping")

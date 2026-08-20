@@ -23,6 +23,9 @@ Usage:
   mousetime sync [-v] [--all]         set the dock clock once, now
   mousetime daemon [--interval 30s]   keep it synced; this is what launchd runs
                                         [--settle 2.5s] [--all] [-v] [--suppress]
+                                        [--battery] [--battery-thresholds 20,10,5]
+  mousetime battery [-v]              read the mouse battery level
+                    [--test-notification]
   mousetime suppress [--dry-run]      silence the receiver interface that emits
                      [--status]        input nobody asked for
                      [--clear]
@@ -66,10 +69,15 @@ case "sync":
     status = runSync(Arguments(rest))
 
 case "daemon":
-    status = runDaemon(Arguments(rest, valueOptions: ["interval", "settle"]))
+    status = runDaemon(Arguments(rest, valueOptions: [
+        "interval", "settle", "battery-interval", "battery-thresholds",
+    ]))
 
 case "suppress":
     status = runSuppress(Arguments(rest))
+
+case "battery":
+    status = runBattery(Arguments(rest))
 
 case "version", "--version", "-v":
     print("mousetime \(version)")

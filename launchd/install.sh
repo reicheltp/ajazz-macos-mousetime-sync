@@ -4,6 +4,8 @@
 #   ./launchd/install.sh              install and start
 #   ./launchd/install.sh --suppress   ...and also silence the phantom-input
 #                                     interface whenever it appears
+#   ./launchd/install.sh --battery    ...and warn when the mouse battery is low
+#   ./launchd/install.sh --suppress --battery    both
 #   ./launchd/install.sh uninstall    stop and remove
 #
 # Works in two situations, which is why it looks for a binary before building
@@ -35,14 +37,28 @@ fi
 # Suppression is opt-in: it disables a whole HID interface, which is safe on the
 # AJ159 because nothing the user presses is on it, but that has not been checked
 # on every model this might run against.
+# Both extras are opt-in. Suppression disables a whole HID interface, which is
+# safe on the AJ159 because nothing the user presses is on it but unverified on
+# other models; battery warnings poll the radio and post notifications.
+EXTRA=""
+for arg in "$@"; do
+	case "$arg" in
+	--suppress) EXTRA="$EXTRA<string>--suppress</string>" ;;
+	--battery) EXTRA="$EXTRA<string>--battery</string>" ;;
+	*)
+		echo "error: unknown argument \"$arg\"" >&2
+		echo "expected --suppress, --battery, or uninstall" >&2
+		exit 2
+		;;
+	esac
+done
+
 # The placeholder sits on its own line so the substitution never has to contain
 # a newline -- BSD sed rejects those in a replacement.
-ARGS_EDIT="/__EXTRA_ARGS__/d"
-if [[ "${1:-}" == "--suppress" ]]; then
-	ARGS_EDIT=$'s|__EXTRA_ARGS__|\t\t<string>--suppress</string>|'
-elif [[ -n "${1:-}" ]]; then
-	echo "error: unknown argument \"$1\" (expected --suppress or uninstall)" >&2
-	exit 2
+if [[ -n "$EXTRA" ]]; then
+	ARGS_EDIT="s|__EXTRA_ARGS__|$EXTRA|"
+else
+	ARGS_EDIT="/__EXTRA_ARGS__/d"
 fi
 
 if [[ -x "$REPO/mousetime" ]]; then

@@ -121,6 +121,36 @@ so the byte layout is pinned by tests (`swift test`) rather than trusted.
 Full write-up, including the interface inventory, the permission reasoning and
 why it re-sends every 30 seconds: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
 
+## Battery, and a warning before it dies
+
+```sh
+mousetime battery                     # mouse battery: 100%
+mousetime battery --test-notification  # prove the notification path works
+```
+
+To get warned automatically, install with `--battery`:
+
+```sh
+./launchd/install.sh --battery
+```
+
+The daemon then reads the level every five minutes and posts a macOS
+notification when it falls to 20%, 10% and 5% — once each per discharge cycle,
+re-armed only when the mouse is actually charged again. Thresholds are
+configurable: `daemon --battery-thresholds 30,15,5`.
+
+Also needs no permission: the level comes from the same vendor interface as the
+clock. Notifications go through `osascript`, so they are attributed to Script
+Editor rather than to mousetime — a bare binary has no bundle identifier, and
+`UNUserNotificationCenter` requires one. A menu bar app would fix that, since it
+needs a bundle anyway.
+
+**A nearly empty battery cannot be produced on demand for testing**, so the
+threshold logic is a pure state machine covered by unit tests rather than
+verified against hardware, and `--test-notification` exists so the delivery path
+can be checked separately. What *has* been verified on hardware is the reading
+itself.
+
 ## The phantom input
 
 In wireless mode the receiver sometimes produces input nobody asked for — System
