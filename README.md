@@ -28,8 +28,8 @@ minimum; it has been tested on macOS 27.0 on Apple Silicon, and nowhere else
 yet.
 
 ```sh
-git clone https://github.com/<your-account>/mousetime.git
-cd mousetime
+git clone https://github.com/reicheltp/ajazz-macos-mousetime-sync.git
+cd ajazz-macos-mousetime-sync
 ./launchd/install.sh
 ```
 
