@@ -131,6 +131,51 @@ After the dock appears on the bus, the firmware needs roughly two seconds before
 it will accept a report. Sent immediately on enumeration, it is lost — silently,
 per the above. `mousetime` waits 2.5 s.
 
+## 8000 Hz and mouse stutter
+
+Not protocol, but the most useful thing measured about this hardware.
+
+**Symptom.** The mouse intermittently hitches while being moved in 2.4 GHz mode.
+Plugging the same cable into the mouse instead of the receiver — same port, same
+hub, same everything else — is smooth.
+
+**What fixed it.** Setting the report rate from 8000 Hz to 1000 Hz. Two separate
+observation periods since, no stutter.
+
+**Why the wired comparison matters.** It rules out bus contention as such: the
+USB path is identical in both cases. What differs is the traffic on it.
+
+`ReportInterval` in the IO registry — the USB endpoint's `bInterval` — measures:
+
+| | Product string | ReportInterval |
+|---|---|---|
+| Wired mouse | `AJAZZ AJ159 APEX` (PID `0x4026`) | 1000 µs |
+| Via the dock | `AJAZZ 2.4G 8K` (PID `0x5007`) | 125 µs |
+
+Identical on all three interfaces of each device, and it does **not** change when
+the report rate is changed — it is a fixed descriptor property of the receiver.
+So the fix works by reducing the *data* actually sent, not the slot reservation:
+an 8 kHz endpoint sitting idle is cheap, one delivering on nearly every 125 µs
+microframe is not. On the machine this was measured on, the receiver sat three
+cascaded USB 2.0 hubs deep, sharing the bus with a webcam and a USB microphone —
+both isochronous, both holding reserved bandwidth.
+
+**Caveats, because this is one machine and a short window:**
+
+- Measured on a hub cascade with isochronous devices. On a receiver plugged
+  straight into the Mac it may not appear at all.
+- The 2.4 GHz link was never ruled out as a contributing factor.
+- The observation period after the change was hours, not weeks, and the original
+  symptom was intermittent.
+- An earlier version of this analysis blamed the endpoint *reservation* rather
+  than the traffic, and predicted the rate setting would not help. It did. The
+  reservation theory was wrong.
+
+**It is not a permanent fix.** The dock does not keep the setting — after
+unplugging and replugging, it read back as 500 Hz rather than the 1000 Hz that
+had been set. Re-pushing it on connect, the way the clock is handled, is
+[issue #3](../../issues/3), and needs the rate command reverse-engineered first.
+
 ## Reading battery and identity
 
 Confirmed against the hardware. Same vendor interface as the clock, and the
