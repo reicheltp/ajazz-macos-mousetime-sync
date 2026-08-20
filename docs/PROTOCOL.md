@@ -222,19 +222,45 @@ An earlier revision of this section argued the opposite from `PrimaryUsage`
 alone and concluded stray keystrokes could not originate here. `PrimaryUsage`
 reports one collection out of four. Descriptors, not summaries.
 
-### What a fix would do
+### The fix: UserKeyMapping
+
+`mousetime suppress` maps every usage the second interface declares to nothing,
+using macOS's own `UserKeyMapping` property — the mechanism behind `hidutil` and
+every "disable Caps Lock" recipe. It needs no permission and is scoped to one
+matched service by vendor ID, product ID **and** primary usage, because the three
+interfaces share the first two.
+
+What was measured while building it:
+
+- A consumer-page source is accepted. The mapping shows up in the event system's
+  active filter (`hidutil dump`, under `ServiceFilterDebug`), not just in the
+  stored property — those two can disagree, so both were checked.
+- All 1088 entries reach that filter. Sizes from 1 to 1088 were tried; the
+  stored property and the active filter agreed at every one.
+- The mouse is unaffected: pointer, all five buttons including browser
+  back/forward, and the wheel all keep working.
+
+What could **not** be measured: whether a usage mapped to zero is discarded
+rather than passed through. The entry is demonstrably in the active filter, but
+the phantom events cannot be triggered on demand, and this mouse has no button
+that emits a consumer usage to test against. The remaining verification is
+whether the symptoms stop.
+
+The mapping lives on a live HID service, so it does not survive unplugging the
+dock or rebooting. `mousetime daemon --suppress` watches for the interface with
+the same `IOServiceAddMatchingNotification` machinery the clock uses and reapplies
+it on arrival.
+
+### The alternative, not taken
 
 `IOHIDDeviceOpen` with `kIOHIDOptionsTypeSeizeDevice` claims an interface
-exclusively, so its input never reaches the window server. Applied to the second
-interface only; the mouse interface must never be seized, for obvious reasons.
+exclusively, so its input never reaches the window server at all. It is the
+stronger guarantee, and would not depend on `UserKeyMapping` semantics.
 
-Costs to weigh before building it: seizing an input device requires Input
-Monitoring, which the clock sync deliberately avoids, so it would have to be
-opt-in and separate. It also holds the interface for as long as the process runs.
-
-Worth trying first, because it needs no code and no permission: `hidutil` can
-set a `UserKeyMapping` on a matched device to map usages to nothing. Whether it
-can cover a full 16-bit consumer array rather than individual usages is untested.
+It was not chosen because seizing an input device requires Input Monitoring,
+which everything else here deliberately avoids, and because it holds the
+interface for as long as the process runs. If suppression turns out not to work,
+this is the next thing to try.
 
 ## Not implemented
 

@@ -9,6 +9,7 @@
 	<array>
 		<string>__BINARY__</string>
 		<string>daemon</string>
+__EXTRA_ARGS__
 	</array>
 
 	<key>RunAtLoad</key>

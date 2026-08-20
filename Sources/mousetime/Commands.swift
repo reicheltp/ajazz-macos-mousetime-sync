@@ -104,10 +104,62 @@ func runSync(_ args: Arguments) -> Int32 {
     return 0
 }
 
+// MARK: - suppress
+
+func runSuppress(_ args: Arguments) -> Int32 {
+    if let bad = reportUnknown(args, known: ["clear", "dry-run", "status"]) { return bad }
+
+    let candidates = DockDiscovery.interfaces(where: \.isPhantomInputCandidate)
+    guard !candidates.isEmpty else {
+        print("no AJAZZ input interface other than the mouse is attached.")
+        print("nothing to suppress — run `mousetime list` to see what is there.")
+        return 1
+    }
+
+    if args.has("dry-run") {
+        print("would map \(PhantomInputSuppressor.declaredUsageCount) usages to nothing on:")
+        for device in candidates { print("  \(device)") }
+        for block in PhantomInputSuppressor.declaredRanges {
+            print(String(format: "  %@ 0x%04x...0x%04x (%d usages)",
+                         HIDUsage.pageName(block.page),
+                         block.usages.lowerBound, block.usages.upperBound,
+                         block.usages.count))
+        }
+        return 0
+    }
+
+    var failed = false
+    for device in candidates {
+        do {
+            if args.has("status") {
+                let count = try PhantomInputSuppressor.appliedCount(for: device)
+                print("\(count) usage(s) suppressed on \(device)")
+            } else if args.has("clear") {
+                try PhantomInputSuppressor.clear(from: device)
+                print("cleared suppression on \(device)")
+            } else {
+                let count = try PhantomInputSuppressor.apply(to: device)
+                print("suppressed \(count) usages on \(device)")
+            }
+        } catch {
+            complain("\(device): \(error)")
+            failed = true
+        }
+    }
+
+    if !args.has("status") && !args.has("clear") {
+        print("")
+        print("this is not persistent: unplugging the dock or rebooting clears it.")
+        print("run `mousetime daemon --suppress` (or reinstall with --suppress) to")
+        print("have it reapplied whenever the interface comes back.")
+    }
+    return failed ? 1 : 0
+}
+
 // MARK: - daemon
 
 func runDaemon(_ args: Arguments) -> Int32 {
-    if let bad = reportUnknown(args, known: ["all", "interval", "settle", "v", "verbose"]) {
+    if let bad = reportUnknown(args, known: ["all", "interval", "settle", "v", "verbose", "suppress"]) {
         return bad
     }
 
@@ -139,6 +191,33 @@ func runDaemon(_ args: Arguments) -> Int32 {
     )
     service.start()
 
+    // Suppression rides along with the daemon because the mapping is attached
+    // to a live HID service: unplugging the dock or rebooting drops it, and
+    // something has to notice the interface coming back. Kept on its own
+    // monitor rather than folded into ClockSyncService — different interface,
+    // different concern.
+    var suppressionMonitor: DockMonitor?
+    if args.has("suppress") {
+        let monitor = DockMonitor(
+            matching: \.isPhantomInputCandidate,
+            onAppear: { device in
+                do {
+                    let count = try PhantomInputSuppressor.apply(to: device)
+                    log.note("suppressed \(count) usages on \(device)")
+                } catch {
+                    log.note("FAILED to suppress \(device): \(error)")
+                }
+            }
+        )
+        do {
+            try monitor.start()
+            suppressionMonitor = monitor
+        } catch {
+            log.note("FAILED to watch for the phantom-input interface: \(error)")
+        }
+    }
+    _ = suppressionMonitor  // held for the process lifetime
+
     installSignalHandlers {
         print("\(stamp(Date())) stopping")
         service.stop()
@@ -166,6 +245,11 @@ private final class DaemonLog {
 
     init(verbose: Bool) {
         self.verbose = verbose
+    }
+
+    /// Prints a line from outside the sync service, on the same log.
+    func note(_ message: String) {
+        emit("\(stamp(Date())) \(message)")
     }
 
     func report(_ event: ClockSyncService.Event) {

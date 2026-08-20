@@ -66,6 +66,25 @@ public struct DeviceInfo: Sendable, Hashable, CustomStringConvertible {
         }
     }
 
+    /// Whether this interface is a pointing device — the one thing on an AJAZZ
+    /// receiver that must never be interfered with.
+    public var isPointingDevice: Bool {
+        primaryUsagePage == HIDUsage.genericDesktopPage
+            && [HIDUsage.pointerUsage, HIDUsage.mouseUsage].contains(primaryUsage)
+    }
+
+    /// Whether this is the receiver interface that emits phantom input: an
+    /// AJAZZ input interface that is not the mouse.
+    ///
+    /// On the AJ159 that is the interface whose primary usage is Consumer, and
+    /// whose descriptor also declares a keyboard collection and a system-control
+    /// collection. Everything the user actually presses lives on the pointing
+    /// device, so this one has no legitimate traffic — see
+    /// ``PhantomInputSuppressor``.
+    public var isPhantomInputCandidate: Bool {
+        isAjazz && isStandardInputDevice && !isPointingDevice
+    }
+
     /// Whether this interface is a plausible carrier for the control protocol:
     /// AJAZZ hardware that is not a standard input device.
     ///

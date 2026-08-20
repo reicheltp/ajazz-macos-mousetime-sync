@@ -121,26 +121,47 @@ so the byte layout is pinned by tests (`swift test`) rather than trusted.
 Full write-up, including the interface inventory, the permission reasoning and
 why it re-sends every 30 seconds: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
 
-## Not fixed yet: the phantom input
+## The phantom input
 
-The other complaint about this mouse in wireless mode is that it sometimes
-produces input nobody asked for — System Settings opening on its own, stray
-keystrokes. **This tool does not address that yet**, but the cause is now
-identified.
+In wireless mode the receiver sometimes produces input nobody asked for — System
+Settings opening on its own, stray keystrokes. The cause is identified, and
+there is an opt-in fix.
 
 The receiver's second HID interface declares a consumer array spanning usages
 `0x0000`–`0x033C`, a keyboard collection accepting any keycode with any
 modifier, and a system-control collection that can request sleep or power down.
-Any corrupted 2.4 GHz packet decoded against that descriptor is a valid report,
-so the radio link occasionally types something or opens something.
+Because the consumer field is a bare range rather than a list of specific
+usages, *any* 16-bit value is a well-formed report — so a corrupted 2.4 GHz
+packet becomes a real system action or a real keystroke.
 
-The useful part: **nothing you press depends on that interface.** The five
-buttons — including browser back and forward — the wheel and horizontal scroll
-are all on the mouse interface. So the offending interface can be disabled
-without losing anything.
+Nothing you press depends on that interface. The five buttons — including
+browser back and forward — the wheel and horizontal scroll are all on the mouse
+interface. So the whole thing can be mapped to nothing:
 
-Full descriptors and the proposed fix are in
-[docs/PROTOCOL.md](docs/PROTOCOL.md#the-phantom-input-problem).
+```sh
+mousetime suppress --dry-run   # show what would be silenced
+mousetime suppress             # do it (needs no permission)
+mousetime suppress --status    # how many usages are currently silenced
+mousetime suppress --clear     # undo
+```
+
+The mapping is attached to a live HID service, so unplugging the dock or
+rebooting clears it. To have it reapplied automatically:
+
+```sh
+./launchd/install.sh --suppress
+```
+
+It is opt-in rather than default because it disables an entire HID interface.
+That is demonstrably safe on the AJ159, whose descriptors are documented in
+[docs/PROTOCOL.md](docs/PROTOCOL.md#what-each-interface-can-emit) — but it has
+not been checked on the other models this may run against.
+
+**Honest limitation:** this uses macOS's own `UserKeyMapping`, and the mapping is
+verifiably present in the event system's active filter. Whether a usage mapped
+to zero is *discarded* rather than passed through could not be proven directly,
+because the phantom events cannot be triggered on demand. The evidence is
+consistent; the proof is "it stopped happening".
 
 ## Contributing
 

@@ -1,8 +1,10 @@
 #!/bin/bash
 # Install mousetime as a per-user launchd agent that keeps the dock clock synced.
 #
-#   ./launchd/install.sh            install and start
-#   ./launchd/install.sh uninstall  stop and remove
+#   ./launchd/install.sh              install and start
+#   ./launchd/install.sh --suppress   ...and also silence the phantom-input
+#                                     interface whenever it appears
+#   ./launchd/install.sh uninstall    stop and remove
 #
 # Works in two situations, which is why it looks for a binary before building
 # one: inside a git clone it compiles from source, and inside an unpacked
@@ -28,6 +30,19 @@ uninstall() {
 if [[ "${1:-}" == "uninstall" ]]; then
 	uninstall
 	exit 0
+fi
+
+# Suppression is opt-in: it disables a whole HID interface, which is safe on the
+# AJ159 because nothing the user presses is on it, but that has not been checked
+# on every model this might run against.
+# The placeholder sits on its own line so the substitution never has to contain
+# a newline -- BSD sed rejects those in a replacement.
+ARGS_EDIT="/__EXTRA_ARGS__/d"
+if [[ "${1:-}" == "--suppress" ]]; then
+	ARGS_EDIT=$'s|__EXTRA_ARGS__|\t\t<string>--suppress</string>|'
+elif [[ -n "${1:-}" ]]; then
+	echo "error: unknown argument \"$1\" (expected --suppress or uninstall)" >&2
+	exit 2
 fi
 
 if [[ -x "$REPO/mousetime" ]]; then
@@ -69,6 +84,7 @@ codesign --force --sign - --identifier "$LABEL" "$BINARY" 2>/dev/null \
 
 echo "==> writing $PLIST"
 sed -e "s|__BINARY__|$BINARY|g" -e "s|__LOGDIR__|$LOGDIR|g" \
+	-e "$ARGS_EDIT" \
 	"$REPO/launchd/$LABEL.plist" >"$PLIST"
 
 echo "==> loading agent"

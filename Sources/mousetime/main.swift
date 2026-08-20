@@ -22,7 +22,10 @@ Usage:
                                       control-channel candidate
   mousetime sync [-v] [--all]         set the dock clock once, now
   mousetime daemon [--interval 30s]   keep it synced; this is what launchd runs
-                                        [--settle 2.5s] [--all] [-v]
+                                        [--settle 2.5s] [--all] [-v] [--suppress]
+  mousetime suppress [--dry-run]      silence the receiver interface that emits
+                     [--status]        input nobody asked for
+                     [--clear]
   mousetime version
   mousetime help
 
@@ -64,6 +67,9 @@ case "sync":
 
 case "daemon":
     status = runDaemon(Arguments(rest, valueOptions: ["interval", "settle"]))
+
+case "suppress":
+    status = runSuppress(Arguments(rest))
 
 case "version", "--version", "-v":
     print("mousetime \(version)")
