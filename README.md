@@ -1,45 +1,68 @@
-# mousetime
+# mousetime — fix the `00:00` clock on an AJAZZ mouse dock on macOS
 
-Keeps the clock on an **AJAZZ AJ159 APEX** smart dock in sync with macOS.
+Sets the clock on the display of an **AJAZZ AJ159 APEX** charging dock from
+macOS, so it stops showing `00:00` and the year 2001.
 
-The dock — the magnetic charging base that doubles as the 2.4 GHz receiver and
-carries the display — has no battery-backed clock. It powers up showing
-`00:00` and the year 2001, and stays there until something tells it the time.
-The Windows driver does that on connect. There is no macOS driver, so nothing
-does. This is that missing piece.
+AJAZZ ships configuration software for Windows only. On macOS the dock's screen
+never learns what time it is: it powers up at `2001-01-01 00:00` and stays
+there. `mousetime` is the small missing piece that tells it — a background
+service, native Swift, no dependencies, and **no macOS permissions required**.
 
-Native Swift against IOKit, no dependencies.
+Should also work on the **AJ179 APEX** and **AJ199** docks, which take the same
+command. If you try one, please open an issue either way.
+
+## The problem, concretely
+
+The AJ159 APEX comes with a magnetic charging dock that doubles as the 2.4 GHz
+receiver and has a little colour display on the front. The display shows a
+clock. The clock is wrong, always, because nothing on macOS ever sets it.
+
+Worse, it does not stay set. Even after you set it once, the dock forgets the
+time again within a few minutes — so a one-shot fix is not enough, and that is
+why this ships as a background service rather than a script you run by hand.
 
 ## Install
 
+Needs the Xcode command line tools. The package declares macOS 13 as its
+minimum; it has been tested on macOS 27.0 on Apple Silicon, and nowhere else
+yet.
+
 ```sh
+git clone https://github.com/<your-account>/mousetime.git
+cd mousetime
 ./launchd/install.sh
 ```
 
-That builds a release binary, installs it to
-`~/Library/Application Support/mousetime/`, and loads a launchd agent that
-re-sends the time every 30 seconds, plus whenever the dock connects, the
-machine wakes from sleep, or the clock or time zone changes.
-
-**No macOS permission is required.** See [Permissions](#permissions) for why
-that is worth pointing out.
+That's it. The dock's clock is correct within a second or two, and stays correct
+— including after sleep, after unplugging and replugging, and across time-zone
+changes. The service starts again automatically when you log in.
 
 ```sh
-tail -f ~/Library/Logs/mousetime.log   # watch it work
-./launchd/install.sh uninstall         # remove
+tail -f ~/Library/Logs/mousetime.log   # see what it is doing
+./launchd/install.sh uninstall         # remove it completely
 ```
 
-## Use directly
+### Why no permission prompt?
+
+Because it never touches your mouse or your keyboard. Comparable tools ask for
+*Input Monitoring*, which is a big thing to grant a background process. This one
+only opens the receiver's vendor-specific interface, which macOS does not treat
+as an input device, and it finds devices by reading the IO registry rather than
+by opening them. Details in [docs/PROTOCOL.md](docs/PROTOCOL.md#permissions).
+
+## Use it by hand
 
 ```sh
 swift build
 
-.build/debug/mousetime list      # what is attached; * marks the control channel
-.build/debug/mousetime sync -v   # set the clock once, reporting each interface
-.build/debug/mousetime daemon    # run in the foreground
+.build/debug/mousetime list      # what's attached; * marks the control channel
+.build/debug/mousetime sync      # set the clock once, right now
+.build/debug/mousetime sync -v   # ...and say what each interface answered
+.build/debug/mousetime daemon    # run in the foreground instead of via launchd
+.build/debug/mousetime help
 ```
 
-`mousetime list` on a connected AJ159 dock looks like this:
+`list` on a connected AJ159 dock:
 
 ```
   3151:5007 GenericDesktop/Mouse "AJAZZ 2.4G 8K" [USB]
@@ -47,121 +70,71 @@ swift build
   3151:5007 Consumer/0x0001 "AJAZZ 2.4G 8K" [USB]
 ```
 
-Three interfaces: the mouse, a vendor-defined control channel, and a
-consumer-control endpoint. The clock command only works on the middle one.
+Three interfaces from one receiver: the mouse, a vendor-defined control channel,
+and a consumer-control endpoint. Only the middle one accepts the clock command.
 
-Note the vendor ID: **`0x3151`**, not the `0x249a` that AJAZZ uses on other
-models. Nothing here matches on vendor or product IDs for that reason — the
-dock is found by its product string containing both `AJAZZ` and `2.4G`.
+## Troubleshooting
 
-If `list` marks no candidate with `*`, try `mousetime sync --all`, which also
-offers the report to the input interfaces.
+**`no AJAZZ interfaces found`** — the dock isn't connected, or its switch is set
+to another machine. `mousetime list --all` lists every HID device on the system,
+which tells you whether macOS sees the receiver at all.
 
-## The protocol
+**`none accepted the clock report`** — run `mousetime sync -v` to see what each
+interface said, then try `mousetime sync --all`, which also offers the report to
+the input interfaces. If that works, please open an issue with the output of
+`mousetime list --all`; it probably means your firmware puts the control channel
+somewhere this doesn't look yet.
 
-A 64-byte HID **feature** report on the vendor-defined interface. Byte 0 is the
-report ID and is part of the transferred buffer.
+**The clock is right but drifts or resets** — check the service is actually
+running: `launchctl print gui/$UID/de.huskycare.mousetime | head`.
 
-| Offset | Value | Meaning |
-|---|---|---|
-| 0 | `0x28` | report ID |
-| 1–6 | `0x00` | padding |
-| 7 | `0xd7` | opcode: set date/time |
-| 8–9 | big endian | year (2026 = `0x07ea`) |
-| 10 | 1–12 | month |
-| 11 | 1–31 | day |
-| 12 | 0–23 | hour |
-| 13 | 0–59 | minute |
-| 14 | 0–59 | second |
-| 15–63 | `0x00` | padding |
+## How it works, briefly
 
-Local time — the dock displays exactly what it is given.
+A 64-byte HID feature report with report ID `0x28` and opcode `0xd7`, carrying
+the year, month, day, hour, minute and second. It goes to the receiver's
+vendor-defined HID interface.
 
-A malformed report is discarded silently; there is no acknowledgement and no
-error. That is why `ClockReport` is a pure function with no IOKit in it, pinned
-byte-for-byte by tests:
+The dock discards a malformed report silently — no acknowledgement, no error —
+so the byte layout is pinned by tests (`swift test`) rather than trusted.
+
+Full write-up, including the interface inventory, the permission reasoning and
+why it re-sends every 30 seconds: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+
+## Not fixed yet: the phantom input
+
+The other complaint about this mouse in wireless mode is that it sometimes
+produces input nobody asked for — System Settings opening on its own, stray
+keystrokes. **This does not address that.** Deliberately: it needs measuring
+before it needs code, and the interface inventory already contradicts part of
+the obvious explanation. See
+[docs/PROTOCOL.md](docs/PROTOCOL.md#the-phantom-input-problem) for where the
+diagnosis stands and what would settle it.
+
+## Contributing
+
+Issues and pull requests welcome, especially:
+
+- **Other docks.** AJ179 APEX, AJ199, or anything else with this screen. Paste
+  the output of `mousetime list --all` and say whether `sync` worked.
+- **More of the protocol.** Battery level and uploading images to the display
+  are both known to be possible; neither is implemented here.
+- **Phantom input measurements.** See the link above.
 
 ```sh
-swift test
+swift build && swift test
 ```
 
-Credit for the opcodes goes to
-[mstoiakevych/ajazz-clock-sync](https://github.com/mstoiakevych/ajazz-clock-sync),
-which implements the same command for Linux and macOS and covers the AJ179 and
-AJ199 docks as well.
+## Credit
 
-## Permissions
+The clock opcodes were worked out by
+[mstoiakevych/ajazz-clock-sync](https://github.com/mstoiakevych/ajazz-clock-sync)
+(MIT), which solves the same problem for Linux and macOS in Python and Swift and
+covers the AJ179 and AJ199 docks. This is an independent implementation from the
+documented byte layout, with different device discovery and no permission
+requirement — but the reverse engineering credit is theirs.
 
-macOS gates HID input devices behind *Input Monitoring*. Other tools in this
-space ask for it, because they use `IOHIDManager` with a match-everything
-dictionary — that opens keyboards too, which trips the check.
+## Licence
 
-mousetime avoids it. Devices are enumerated by reading the IO registry
-(`IOServiceGetMatchingServices` plus `IORegistryEntryCreateCFProperty`), which
-is unprivileged, and the only interface ever opened is the vendor-defined one,
-which is not a protected input device. Nothing about the clock needs to touch
-the mouse, the keyboard, or the consumer endpoint.
+GNU General Public License v3.0 or later. See [LICENSE](LICENSE).
 
-## Architecture
-
-`MouseTimeKit` holds the logic and `mousetime` is a thin CLI over it, so a menu
-bar app can be added later without restructuring.
-
-| File | Role |
-|---|---|
-| `Sources/MouseTimeKit/ClockReport.swift` | the wire format, pure and testable |
-| `Sources/MouseTimeKit/DockDiscovery.swift` | registry enumeration, interface classification |
-| `Sources/MouseTimeKit/ClockSync.swift` | opening the interface and sending the report |
-| `Sources/MouseTimeKit/DockMonitor.swift` | hotplug notifications, no polling |
-| `Sources/MouseTimeKit/ClockSyncService.swift` | the four sync triggers, with debounce |
-| `Sources/MouseTimeKit/HIDUsage.swift` | usage-page/usage names for legible output |
-
-### Why it re-sends every 30 seconds
-
-Measured on an AJ159: the dock forgets the time again within a few minutes of
-being set — most likely when the mouse's radio link drops as it goes to sleep —
-and it does so **while staying enumerated on USB**. Same `locationID`, same
-three interfaces, no re-registration in the IO registry.
-
-That has a direct consequence: no device notification fires when the clock
-resets, so hotplug detection cannot catch it and there is nothing to react to.
-Re-sending on a timer is the only thing that recovers the display, which makes
-the interval the primary mechanism rather than a safety net.
-
-The cost is one 64-byte feature report to a dock that is powered by USB. The
-mouse's own battery is not involved, so a short interval is close to free.
-
-Hotplug detection is still there and still worth having — it catches replugging
-the dock and switching the hub between machines, where the timer would leave the
-display wrong for up to 30 seconds. After the dock appears there is a ~2.5 s
-settle before the report goes out: the firmware will not accept one immediately
-after enumeration, and a report sent too early is lost without any error.
-
-Because the interval is seconds, the daemon summarises routine periodic syncs
-rather than logging each one — one line, then a count every 15 minutes. Device
-arrivals, departures and refusals are always logged immediately. `daemon -v`
-logs everything.
-
-## Not done yet: the phantom input
-
-The other half of the problem is that in 2.4 GHz mode the receiver sometimes
-produces input nobody asked for — System Settings opening on its own, stray
-keystrokes. That is **not addressed yet**, on purpose: it needs measuring
-before it needs code.
-
-What the interface inventory already tells us:
-
-- The AJ159 receiver publishes **no keyboard interface**. Only mouse,
-  vendor, and consumer. So stray *keystrokes* cannot originate here — the
-  receiver has no way to send them.
-- System Settings opening by itself is consistent with the consumer interface.
-  HID Consumer usage `0x019f` ("AL Control Panel") is mapped by macOS to
-  exactly that. This is a hypothesis, not a measurement.
-- The consumer interface may also be where the side buttons' browser
-  back/forward live (`AC Back` = `0x0224`, `AC Forward` = `0x0225`) — or they
-  may be plain mouse buttons 4 and 5. Until that is known, the consumer
-  interface must not be filtered wholesale.
-
-Next step is a `watch` command that logs what each interface actually emits,
-without intercepting it. That one does need Input Monitoring. A fix comes after
-the data, not before.
+Copyright (C) 2026 Paul Reichelt-Ritter

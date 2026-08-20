@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Paul Reichelt-Ritter
+
 import Foundation
 import IOKit
 import IOKit.hid

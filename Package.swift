@@ -1,4 +1,10 @@
 // swift-tools-version: 6.0
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Paul Reichelt-Ritter
+//
+// The tools-version comment must stay on the first line — SwiftPM reads it from
+// there, so the licence header goes below it, not above.
+
 import PackageDescription
 
 // No dependencies: everything this tool does is IOKit, which ships with the OS.

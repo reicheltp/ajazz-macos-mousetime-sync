@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Paul Reichelt-Ritter
+
 import Foundation
 
 // Line-buffer stdout. When launchd redirects it to a log file it is a pipe, not
