@@ -53,8 +53,12 @@ launchctl enable "gui/$UID/$LABEL"
 
 cat <<EOF
 
-installed. The dock clock is set when it connects, after waking from sleep,
-on time-zone changes, and every 15 minutes as a safety net.
+installed. The dock clock is re-sent every 30 seconds, and also when the dock
+connects, after waking from sleep, and on clock or time-zone changes.
+
+The short interval is not paranoia: the dock forgets the time within a few
+minutes, without re-enumerating on USB, so nothing announces it and re-sending
+is the only cure. One 64-byte report to a USB-powered dock costs nothing.
 
 No macOS permission is needed: only the receiver's vendor-specific interface
 is opened, which is not a protected input device.

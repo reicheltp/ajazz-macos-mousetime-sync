@@ -38,7 +38,16 @@ public final class ClockSyncService: @unchecked Sendable {
     }
 
     public struct Configuration: Sendable {
-        /// Safety-net re-send interval.
+        /// How often to re-send the time.
+        ///
+        /// This is the primary trigger, not a safety net. Measured on an AJ159:
+        /// the dock forgets the time within a few minutes — most likely when
+        /// the mouse's radio link drops as it goes to sleep — *without*
+        /// re-enumerating on USB. So no device notification fires, and the only
+        /// thing that recovers the display is re-sending.
+        ///
+        /// The cost is one 64-byte feature report to a USB-powered dock, so a
+        /// short interval is close to free; the mouse's battery is not involved.
         public var interval: TimeInterval
         /// How long to wait after the dock appears before sending. The firmware
         /// will not accept a report immediately after enumeration — sent too
@@ -50,7 +59,7 @@ public final class ClockSyncService: @unchecked Sendable {
         public var debounce: TimeInterval
 
         public init(
-            interval: TimeInterval = 15 * 60,
+            interval: TimeInterval = 30,
             settle: TimeInterval = 2.5,
             debounce: TimeInterval = 2
         ) {

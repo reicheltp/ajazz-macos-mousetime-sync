@@ -18,8 +18,8 @@ Usage:
   mousetime list [--all] [--dock]     show AJAZZ HID interfaces; * marks the
                                       control-channel candidate
   mousetime sync [-v] [--all]         set the dock clock once, now
-  mousetime daemon [--interval 15m]   keep it synced; this is what launchd runs
-                                        [--settle 2.5s] [--all]
+  mousetime daemon [--interval 30s]   keep it synced; this is what launchd runs
+                                        [--settle 2.5s] [--all] [-v]
   mousetime version
   mousetime help
 
@@ -30,6 +30,13 @@ Options:
               may prompt for Input Monitoring.
   --dock      (list) only the 2.4G receiver dock
   -v          (sync) report every interface tried, and why it refused
+              (daemon) log every periodic sync instead of summarising them
+
+Why the short interval: the dock forgets the time within a few minutes -- most
+likely when the mouse's radio link drops as it sleeps -- and it does so without
+re-enumerating on USB, so no device notification fires. Re-sending is the only
+thing that recovers the display. One 64-byte report to a USB-powered dock costs
+nothing, and the mouse's own battery is not involved.
 
 Install as a background service:
   ./launchd/install.sh

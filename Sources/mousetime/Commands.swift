@@ -104,7 +104,9 @@ func runSync(_ args: Arguments) -> Int32 {
 // MARK: - daemon
 
 func runDaemon(_ args: Arguments) -> Int32 {
-    if let bad = reportUnknown(args, known: ["all", "interval", "settle"]) { return bad }
+    if let bad = reportUnknown(args, known: ["all", "interval", "settle", "v", "verbose"]) {
+        return bad
+    }
 
     var configuration = ClockSyncService.Configuration()
     if let text = args.value("interval") {
@@ -126,10 +128,11 @@ func runDaemon(_ args: Arguments) -> Int32 {
     print("\(stamp(Date())) daemon starting: interval=\(brief(configuration.interval)) "
         + "settle=\(brief(configuration.settle)) scope=\(args.has("all") ? "all-ajazz" : "control")")
 
+    let log = DaemonLog(verbose: args.has("v", "verbose"))
     let service = ClockSyncService(
         configuration: configuration,
         sendingTo: scope.predicate,
-        onEvent: report
+        onEvent: { log.report($0) }
     )
     service.start()
 
@@ -145,28 +148,91 @@ func runDaemon(_ args: Arguments) -> Int32 {
     return 0
 }
 
-private func report(_ event: ClockSyncService.Event) {
-    let time = stamp(Date())
-    switch event {
-    case .appeared(let device):
-        print("\(time) appeared  \(device)")
-    case .disappeared(let device):
-        print("\(time) gone      \(device)")
-    case .synced(let reason, let when, let device):
-        print("\(time) synced    [\(reason.rawValue)] \(stamp(when)) via \(device)")
-    case .failed(let reason, let outcome):
-        print("\(time) FAILED    [\(reason.rawValue)] \(outcome.attempts.count) interface(s) refused:")
-        for attempt in outcome.attempts {
-            guard let failure = attempt.failure else { continue }
-            print("\(time)             \(attempt.device) → \(failure)")
+/// Writes daemon events to stdout, collapsing the routine ones.
+///
+/// The sync interval is seconds, not minutes, so logging every successful
+/// periodic sync would bury the events that actually matter under thousands of
+/// identical lines a day. Routine periodic successes are therefore summarised on
+/// a heartbeat; anything unusual — a device appearing or going, a refusal — is
+/// always printed immediately.
+private final class DaemonLog {
+    private let verbose: Bool
+    private let heartbeat: TimeInterval = 15 * 60
+    private var lastHeartbeat: Date?
+    private var collapsed = 0
+
+    init(verbose: Bool) {
+        self.verbose = verbose
+    }
+
+    func report(_ event: ClockSyncService.Event) {
+        let time = stamp(Date())
+        switch event {
+        case .appeared(let device):
+            emit("\(time) appeared  \(device)")
+        case .disappeared(let device):
+            emit("\(time) gone      \(device)")
+
+        case .synced(let reason, let when, let device):
+            let line = "\(time) synced    [\(reason.rawValue)] \(stamp(when)) via \(device)"
+            if reason == .periodic && !verbose {
+                collapse(line)
+            } else {
+                emit(line)
+            }
+
+        case .failed(let reason, let outcome):
+            emit("\(time) FAILED    [\(reason.rawValue)] "
+                + "\(outcome.attempts.count) interface(s) refused:")
+            for attempt in outcome.attempts {
+                guard let failure = attempt.failure else { continue }
+                emit("\(time)             \(attempt.device) → \(failure)")
+            }
+
+        case .absent(let reason):
+            // Expected whenever the dock is unplugged, and the periodic timer
+            // keeps firing, so this collapses too.
+            let line = "\(time) absent    [\(reason.rawValue)] no matching interface"
+            if reason == .periodic && !verbose {
+                collapse(line)
+            } else {
+                emit(line)
+            }
+
+        case .debounced(let reason):
+            if verbose { emit("\(time) skipped   [\(reason.rawValue)] just synced") }
+
+        case .failedToStart(let message):
+            emit("\(time) FAILED    could not watch for devices: \(message)")
+            emit("\(time)           falling back to the periodic timer only")
         }
-    case .absent(let reason):
-        print("\(time) absent    [\(reason.rawValue)] no matching interface")
-    case .debounced(let reason):
-        print("\(time) skipped   [\(reason.rawValue)] just synced")
-    case .failedToStart(let message):
-        print("\(time) FAILED    could not watch for devices: \(message)")
-        print("\(time)           falling back to the periodic timer only")
+    }
+
+    /// Prints `line` at most once per heartbeat, noting how many were folded in.
+    private func collapse(_ line: String) {
+        let now = Date()
+        if let last = lastHeartbeat, now.timeIntervalSince(last) < heartbeat {
+            collapsed += 1
+            return
+        }
+        lastHeartbeat = now
+        let folded = collapsed
+        collapsed = 0
+        write(folded > 0 ? "\(line) (+\(folded) more like this)" : line)
+    }
+
+    /// Prints a noteworthy line and reopens the heartbeat window, so the next
+    /// routine line is shown instead of being folded away. That way the log
+    /// records the recovery after a disconnect or a refusal, rather than going
+    /// quiet again for fifteen minutes.
+    private func emit(_ line: String) {
+        write(line)
+        lastHeartbeat = nil
+        collapsed = 0
+    }
+
+    private func write(_ line: String) {
+        print(line)
     }
 }
 

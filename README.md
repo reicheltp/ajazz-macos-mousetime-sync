@@ -18,8 +18,8 @@ Native Swift against IOKit, no dependencies.
 
 That builds a release binary, installs it to
 `~/Library/Application Support/mousetime/`, and loads a launchd agent that
-syncs the clock when the dock connects, after the machine wakes from sleep, on
-time-zone or clock changes, and every 15 minutes as a safety net.
+re-sends the time every 30 seconds, plus whenever the dock connects, the
+machine wakes from sleep, or the clock or time zone changes.
 
 **No macOS permission is required.** See [Permissions](#permissions) for why
 that is worth pointing out.
@@ -116,15 +116,31 @@ bar app can be added later without restructuring.
 | `Sources/MouseTimeKit/ClockSyncService.swift` | the four sync triggers, with debounce |
 | `Sources/MouseTimeKit/HIDUsage.swift` | usage-page/usage names for legible output |
 
-The dock disappears from the bus entirely when the mouse sleeps or the hub is
-switched to another machine, and comes back with its clock reset — so the
-*transition* is the signal that matters, not a periodic check. Hence
-`IOServiceAddMatchingNotification` rather than polling, with the timer only as
-a safety net.
+### Why it re-sends every 30 seconds
 
-One deliberate delay: after the dock appears there is a ~2.5 s settle before
-the report is sent. The firmware will not accept it immediately after
-enumeration, and a report sent too early is lost without any error.
+Measured on an AJ159: the dock forgets the time again within a few minutes of
+being set — most likely when the mouse's radio link drops as it goes to sleep —
+and it does so **while staying enumerated on USB**. Same `locationID`, same
+three interfaces, no re-registration in the IO registry.
+
+That has a direct consequence: no device notification fires when the clock
+resets, so hotplug detection cannot catch it and there is nothing to react to.
+Re-sending on a timer is the only thing that recovers the display, which makes
+the interval the primary mechanism rather than a safety net.
+
+The cost is one 64-byte feature report to a dock that is powered by USB. The
+mouse's own battery is not involved, so a short interval is close to free.
+
+Hotplug detection is still there and still worth having — it catches replugging
+the dock and switching the hub between machines, where the timer would leave the
+display wrong for up to 30 seconds. After the dock appears there is a ~2.5 s
+settle before the report goes out: the firmware will not accept one immediately
+after enumeration, and a report sent too early is lost without any error.
+
+Because the interval is seconds, the daemon summarises routine periodic syncs
+rather than logging each one — one line, then a count every 15 minutes. Device
+arrivals, departures and refusals are always logged immediately. `daemon -v`
+logs everything.
 
 ## Not done yet: the phantom input
 
