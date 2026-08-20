@@ -23,9 +23,30 @@ why this ships as a background service rather than a script you run by hand.
 
 ## Install
 
-Needs the Xcode command line tools. The package declares macOS 13 as its
-minimum; it has been tested on macOS 27.0 on Apple Silicon, and nowhere else
-yet.
+The package declares macOS 13 as its minimum. It has been tested on macOS 27.0
+on Apple Silicon, and nowhere else yet.
+
+### Download a build
+
+Grab the archive from [Releases](../../releases) — one universal binary, Apple
+Silicon and Intel:
+
+```sh
+tar -xzf mousetime-*-macos.tar.gz
+cd mousetime-*-macos
+./launchd/install.sh
+```
+
+**macOS will not trust this download, and it is right not to.** There is no
+Apple Developer ID behind this project, so the binary cannot be notarised.
+`install.sh` clears the quarantine flag on the copy it installs and tells you
+while it does it. If handing Gatekeeper a bypass for a stranger's binary is not
+your idea of a good time — fair — build it yourself, below. Either way, check
+the archive against the published `.sha256`.
+
+### Or build it
+
+Needs only the Xcode command line tools; the package has no dependencies.
 
 ```sh
 git clone https://github.com/reicheltp/ajazz-macos-mousetime-sync.git
@@ -33,9 +54,9 @@ cd ajazz-macos-mousetime-sync
 ./launchd/install.sh
 ```
 
-That's it. The dock's clock is correct within a second or two, and stays correct
-— including after sleep, after unplugging and replugging, and across time-zone
-changes. The service starts again automatically when you log in.
+Either route ends the same way: the dock's clock is correct within a second or
+two and stays correct — after sleep, after unplugging and replugging, and across
+time-zone changes. The service starts again automatically when you log in.
 
 ```sh
 tail -f ~/Library/Logs/mousetime.log   # see what it is doing
@@ -122,6 +143,24 @@ Issues and pull requests welcome, especially:
 
 ```sh
 swift build && swift test
+```
+
+### Cutting a release
+
+The version in `Sources/mousetime/main.swift` is the single source of truth. Bump
+it, commit, then tag:
+
+```sh
+git tag v0.2.0 && git push --tags
+```
+
+`.github/workflows/release.yml` refuses to publish if the tag and that version
+disagree, so a release can never advertise a version its binary does not report.
+The build itself lives in `scripts/package.sh` — run it locally to get the exact
+archive CI would publish, including the universal-binary check:
+
+```sh
+./scripts/package.sh
 ```
 
 ## Credit

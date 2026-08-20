@@ -1,0 +1,99 @@
+name: Release
+
+# Tag a commit to publish: `git tag v0.1.0 && git push --tags`.
+#
+# The build steps live in scripts/package.sh rather than here, so the artefact
+# that gets published is the same one anyone can reproduce locally by running
+# that script. This file only handles the parts that are specific to CI.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      # The version lives in the source, and package.sh reads it from there. If
+      # the tag disagrees, the release would advertise a version the binary does
+      # not report -- so fail here rather than publish the mismatch.
+      - name: Check the tag matches the version in the source
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          source_version="$(sed -n 's/^let version = "\(.*\)"$/\1/p' Sources/mousetime/main.swift)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          echo "source: $source_version"
+          echo "tag:    $tag_version"
+          if [[ "$source_version" != "$tag_version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version \"$source_version\" in Sources/mousetime/main.swift"
+            exit 1
+          fi
+
+      # Runs the tests, builds the universal binary, checks it really is
+      # universal, ad-hoc signs it, and writes dist/*.tar.gz plus a checksum.
+      - name: Test, build and package
+        run: ./scripts/package.sh
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="$(cat <<'EOF'
+          Universal binary for Apple Silicon and Intel.
+
+          ```sh
+          tar -xzf mousetime-VERSION-macos.tar.gz
+          cd mousetime-VERSION-macos
+          ./launchd/install.sh
+          ```
+
+          ### macOS will warn you about this download
+
+          This project has no Apple Developer ID, so the binary cannot be
+          notarised and Gatekeeper does not trust it. `install.sh` clears the
+          quarantine flag on the copy it installs, and says so while doing it.
+
+          If you would rather not take an unsigned binary from a stranger — a
+          reasonable position — build it yourself instead. It needs no
+          dependencies beyond the Xcode command line tools:
+
+          ```sh
+          git clone https://github.com/reicheltp/ajazz-macos-mousetime-sync.git
+          cd ajazz-macos-mousetime-sync
+          ./launchd/install.sh
+          ```
+
+          Verify the archive against the published `.sha256` either way.
+
+          ### Permissions
+
+          None. Setting the dock's clock only touches the receiver's
+          vendor-specific HID interface, which macOS does not treat as an input
+          device. See `docs/PROTOCOL.md`.
+          EOF
+          )"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "mousetime $version" \
+            --notes "${notes//VERSION/$version}" \
+            "dist/mousetime-$version-macos.tar.gz" \
+            "dist/mousetime-$version-macos.tar.gz.sha256"
+
+      # On workflow_dispatch there is no tag to release against, so keep the
+      # artefact around instead: that makes this file testable without cutting a
+      # version.
+      - name: Upload artefact
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: mousetime-macos
+          path: dist/*.tar.gz*

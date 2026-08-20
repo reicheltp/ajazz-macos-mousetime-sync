@@ -1,8 +1,13 @@
 #!/bin/bash
 # Install mousetime as a per-user launchd agent that keeps the dock clock synced.
 #
-#   ./launchd/install.sh            build, install and start
+#   ./launchd/install.sh            install and start
 #   ./launchd/install.sh uninstall  stop and remove
+#
+# Works in two situations, which is why it looks for a binary before building
+# one: inside a git clone it compiles from source, and inside an unpacked
+# release archive it uses the binary shipped alongside it. Keeping it one script
+# means the download path and the build path cannot drift apart.
 set -euo pipefail
 
 LABEL="de.huskycare.mousetime"
@@ -25,20 +30,40 @@ if [[ "${1:-}" == "uninstall" ]]; then
 	exit 0
 fi
 
-echo "==> building"
-cd "$REPO"
-swift build -c release
+if [[ -x "$REPO/mousetime" ]]; then
+	# Unpacked release archive: the binary sits next to this script's parent.
+	SOURCE="$REPO/mousetime"
+	echo "==> using the prebuilt binary in $REPO"
+elif [[ -f "$REPO/Package.swift" ]]; then
+	echo "==> building from source"
+	(cd "$REPO" && swift build -c release)
+	SOURCE="$REPO/.build/release/mousetime"
+else
+	echo "error: found neither a prebuilt ./mousetime nor a Package.swift in $REPO" >&2
+	exit 1
+fi
 
 echo "==> installing to $BINARY"
 mkdir -p "$PREFIX" "$LOGDIR" "$(dirname "$PLIST")"
-# Copy to a stable path rather than running out of .build: macOS ties any
-# permission grant to the binary's path and signature, and .build is wiped by
-# `swift package clean`.
-install -m 755 "$REPO/.build/release/mousetime" "$BINARY"
+# Copy to a stable path rather than running from .build or the download folder:
+# macOS ties any permission grant to the binary's path and signature, and
+# `swift package clean` wipes .build.
+install -m 755 "$SOURCE" "$BINARY"
 
-# Ad-hoc sign with a stable identifier. Without a Developer ID this does not
-# survive a rebuild for permission purposes, but it does give the binary a
-# consistent identity, which is as good as it gets here.
+# A binary downloaded from the internet carries com.apple.quarantine, and macOS
+# refuses to launch it because this project has no Apple Developer ID to
+# notarise with. Clearing the flag is what makes a downloaded release runnable
+# at all -- said out loud rather than done quietly, because it is a deliberate
+# step around Gatekeeper and only sensible for software you chose to trust.
+if xattr -p com.apple.quarantine "$BINARY" >/dev/null 2>&1; then
+	echo "==> clearing the Gatekeeper quarantine flag on the installed binary"
+	echo "    (it was downloaded; this project is unsigned and cannot be notarised)"
+	xattr -d com.apple.quarantine "$BINARY" 2>/dev/null || true
+fi
+
+# Ad-hoc sign with a stable identifier. This does not satisfy Gatekeeper -- only
+# a Developer ID would -- but it gives the binary a consistent identity, which
+# is what macOS keys permission grants to.
 codesign --force --sign - --identifier "$LABEL" "$BINARY" 2>/dev/null \
 	|| echo "    (codesign failed; continuing unsigned)"
 
