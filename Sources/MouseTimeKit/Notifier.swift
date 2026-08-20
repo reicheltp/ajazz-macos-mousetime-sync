@@ -7,11 +7,22 @@ import Foundation
 ///
 /// Uses `osascript` rather than `UNUserNotificationCenter`, which needs a bundle
 /// identifier — a bare command-line binary has none, and the framework fails
-/// rather than falling back. The cost is that the notification is attributed to
-/// Script Editor instead of to us; a proper `.app` bundle would fix that, and is
-/// the natural moment to switch, since a menu bar app needs one anyway.
+/// rather than falling back.
+///
+/// **This does not reliably deliver.** Because the notification is attributed to
+/// Script Editor, delivery depends on Script Editor's own notification
+/// permission, and on macOS 27 nothing appeared on screen even though
+/// `osascript` exited 0. So a `true` return means "osascript accepted it", not
+/// "the user saw it" — there is no way to tell the difference from here.
+///
+/// The real fix is shipping inside an `.app` bundle so
+/// `UNUserNotificationCenter` can be used directly, which is what the menu bar
+/// app brings. Until then this is kept as a best-effort path.
 public enum Notifier {
-    /// Posts a notification. Returns false if `osascript` refused.
+    /// Posts a notification.
+    ///
+    /// - Returns: whether `osascript` accepted the request — **not** whether
+    ///   anything was displayed. See the type's note.
     ///
     /// Never throws: a background daemon must not die because a notification
     /// could not be shown.

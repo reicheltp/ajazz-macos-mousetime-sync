@@ -167,7 +167,11 @@ func runBattery(_ args: Arguments) -> Int32 {
         let posted = Notifier.post(
             title: "mousetime", subtitle: "AJAZZ AJ159 APEX",
             body: "Test: battery would be at 5%", sound: "Submarine")
-        print(posted ? "notification posted" : "osascript refused to post")
+        // Deliberately not "notification shown": osascript exits 0 even when
+        // nothing is displayed, which is exactly the open bug here.
+        print(posted
+            ? "osascript accepted it — if nothing appeared on screen, that is issue #1"
+            : "osascript refused to post")
         return posted ? 0 : 1
     }
 

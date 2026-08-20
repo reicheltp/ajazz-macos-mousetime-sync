@@ -124,32 +124,34 @@ why it re-sends every 30 seconds: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
 ## Battery, and a warning before it dies
 
 ```sh
-mousetime battery                     # mouse battery: 100%
-mousetime battery --test-notification  # prove the notification path works
+mousetime battery      # mouse battery: 100%
+mousetime battery -v   # ...and the raw reply
 ```
 
-To get warned automatically, install with `--battery`:
+Reading the level works and needs no permission — it comes from the same vendor
+interface as the clock.
+
+> **The warning does not reach you yet.** `daemon --battery` reads the level
+> every five minutes and decides correctly when to warn, but delivery is broken:
+> notifications go through `osascript` (a bare binary has no bundle identifier,
+> and `UNUserNotificationCenter` requires one) and nothing appears on screen even
+> though `osascript` reports success — [#1](../../issues/1). The fix is an `.app`
+> bundle, which arrives with the menu bar app in [#2](../../issues/2). Until
+> then, `--battery` is only useful for what it writes to the log.
 
 ```sh
-./launchd/install.sh --battery
+./launchd/install.sh --battery                    # log the level, thresholds armed
+mousetime daemon --battery-thresholds 30,15,5     # defaults are 20,10,5
 ```
 
-The daemon then reads the level every five minutes and posts a macOS
-notification when it falls to 20%, 10% and 5% — once each per discharge cycle,
-re-armed only when the mouse is actually charged again. Thresholds are
-configurable: `daemon --battery-thresholds 30,15,5`.
+Warnings fire once per threshold per discharge cycle, re-armed only when the
+mouse is genuinely charged again — a battery hovering at 10, 11, 10 is one low
+battery, not three events.
 
-Also needs no permission: the level comes from the same vendor interface as the
-clock. Notifications go through `osascript`, so they are attributed to Script
-Editor rather than to mousetime — a bare binary has no bundle identifier, and
-`UNUserNotificationCenter` requires one. A menu bar app would fix that, since it
-needs a bundle anyway.
-
-**A nearly empty battery cannot be produced on demand for testing**, so the
-threshold logic is a pure state machine covered by unit tests rather than
-verified against hardware, and `--test-notification` exists so the delivery path
-can be checked separately. What *has* been verified on hardware is the reading
-itself.
+**A nearly empty battery cannot be produced on demand**, so that logic is a pure
+state machine covered by unit tests rather than verified against hardware. Its
+tests caught two real bugs before it ever ran. What *has* been verified against
+hardware is the reading itself.
 
 ## The phantom input
 
