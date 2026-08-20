@@ -1,0 +1,9 @@
+# Build output
+/mousetime
+/dist/
+
+# JetBrains
+.idea/
+
+# macOS
+.DS_Store
