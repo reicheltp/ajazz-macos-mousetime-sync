@@ -1,5 +1,9 @@
-# Build output
-/mousetime
+# SwiftPM
+/.build/
+/.swiftpm/
+*.xcodeproj
+
+# Release output
 /dist/
 
 # JetBrains
