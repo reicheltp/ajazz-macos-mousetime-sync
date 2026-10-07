@@ -110,11 +110,15 @@ somewhere this doesn't look yet.
 running: `launchctl print gui/$UID/de.huskycare.mousetime | head`.
 
 **The mouse stutters over the dock, but not on a cable** — the receiver defaults
-to an 8000 Hz report rate, which is a lot of USB traffic. Setting it to 1000 Hz
-fixed it here. There is no way to do that from this tool yet
-([#3](../../issues/3)); AJAZZ's own web driver at
-[qmk.top](https://qmk.top) can, in any Chromium browser. Details and caveats in
-[docs/PROTOCOL.md](docs/PROTOCOL.md#8000-hz-and-mouse-stutter).
+to an 8000 Hz report rate, which is a lot of USB traffic. 1000 Hz fixed it here:
+
+```sh
+mousetime rate            # what it is now
+mousetime rate 1000       # set it, confirmed by reading back
+./launchd/install.sh --rate=1000   # keep it there; the receiver forgets on unplug
+```
+
+Details and caveats in [docs/PROTOCOL.md](docs/PROTOCOL.md#8000-hz-and-mouse-stutter).
 
 ## How it works, briefly
 

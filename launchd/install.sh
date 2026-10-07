@@ -5,7 +5,9 @@
 #   ./launchd/install.sh --suppress   ...and also silence the phantom-input
 #                                     interface whenever it appears
 #   ./launchd/install.sh --battery    ...and warn when the mouse battery is low
-#   ./launchd/install.sh --suppress --battery    both
+#   ./launchd/install.sh --rate=1000  ...and hold the mouse at 1000 Hz, which
+#                                     fixes stutter at 8000 Hz on busy hubs
+#   ./launchd/install.sh --suppress --battery    several at once
 #   ./launchd/install.sh uninstall    stop and remove
 #
 # Works in two situations, which is why it looks for a binary before building
@@ -34,20 +36,19 @@ if [[ "${1:-}" == "uninstall" ]]; then
 	exit 0
 fi
 
-# Suppression is opt-in: it disables a whole HID interface, which is safe on the
-# AJ159 because nothing the user presses is on it, but that has not been checked
-# on every model this might run against.
-# Both extras are opt-in. Suppression disables a whole HID interface, which is
+# All extras are opt-in. Suppression disables a whole HID interface, which is
 # safe on the AJ159 because nothing the user presses is on it but unverified on
-# other models; battery warnings poll the radio and post notifications.
+# other models; battery warnings poll the radio and post notifications; the
+# rate setting writes to the mouse.
 EXTRA=""
 for arg in "$@"; do
 	case "$arg" in
 	--suppress) EXTRA="$EXTRA<string>--suppress</string>" ;;
 	--battery) EXTRA="$EXTRA<string>--battery</string>" ;;
+	--rate=[0-9]*) EXTRA="$EXTRA<string>--rate</string><string>${arg#--rate=}</string>" ;;
 	*)
 		echo "error: unknown argument \"$arg\"" >&2
-		echo "expected --suppress, --battery, or uninstall" >&2
+		echo "expected --suppress, --battery, --rate=<hz>, or uninstall" >&2
 		exit 2
 		;;
 	esac
@@ -105,7 +106,17 @@ sed -e "s|__BINARY__|$BINARY|g" -e "s|__LOGDIR__|$LOGDIR|g" \
 
 echo "==> loading agent"
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$UID" "$PLIST"
+# bootout returns before the old instance is fully gone, and bootstrapping over
+# it fails with "Bootstrap failed: 5: Input/output error". Retry briefly.
+for attempt in 1 2 3 4 5; do
+	if launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then
+		break
+	fi
+	if [[ $attempt -eq 5 ]]; then
+		launchctl bootstrap "gui/$UID" "$PLIST"  # once more, with its error visible
+	fi
+	sleep 1
+done
 launchctl enable "gui/$UID/$LABEL"
 
 cat <<EOF

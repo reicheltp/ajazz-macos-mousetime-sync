@@ -201,11 +201,51 @@ func runBattery(_ args: Arguments) -> Int32 {
     }
 }
 
+// MARK: - rate
+
+func runRate(_ args: Arguments) -> Int32 {
+    if let bad = reportUnknown(args, known: []) { return bad }
+    guard args.positional.count <= 1 else {
+        complain("expected at most one rate, got \(args.positional.joined(separator: " "))")
+        return 2
+    }
+
+    guard let device = ReportRateControl.firstControlInterface() else {
+        print("no AJAZZ control interface attached.")
+        return 1
+    }
+
+    do {
+        guard let text = args.positional.first else {
+            print("report rate: \(try ReportRateControl.read(from: device)) Hz")
+            return 0
+        }
+        guard let hz = Int(text.lowercased().replacingOccurrences(of: "hz", with: "")) else {
+            complain("bad rate \"\(text)\"; expected one of "
+                + ReportRate.supported.map(String.init).joined(separator: ", "))
+            return 2
+        }
+        switch try ReportRateControl.ensure(hz, on: device) {
+        case .unchanged(let hz):
+            print("report rate: already \(hz) Hz")
+        case .changed(let from, let to):
+            print("report rate: \(from) Hz → \(to) Hz (read back and confirmed)")
+            print("")
+            print("this does not survive unplugging the receiver. run the daemon with")
+            print("--rate \(to) (or reinstall with --rate=\(to)) to have it reapplied.")
+        }
+        return 0
+    } catch {
+        complain("\(error)")
+        return 1
+    }
+}
+
 // MARK: - daemon
 
 func runDaemon(_ args: Arguments) -> Int32 {
     if let bad = reportUnknown(args, known: ["all", "interval", "settle", "v", "verbose", "suppress", "battery",
-                 "battery-interval", "battery-thresholds"]) {
+                 "battery-interval", "battery-thresholds", "rate", "rate-interval"]) {
         return bad
     }
 
@@ -310,6 +350,50 @@ func runDaemon(_ args: Arguments) -> Int32 {
     }
     _ = batteryMonitor  // held for the process lifetime
 
+    // Report rate. Opt-in: it writes to the mouse, and 8000 Hz is a perfectly
+    // good default on a machine where it does not stutter.
+    var rateKeeper: ReportRateKeeper?
+    if let text = args.value("rate") {
+        guard let hz = Int(text), ReportRate.code(forHz: hz) != nil else {
+            complain("bad --rate \"\(text)\"; expected one of "
+                + ReportRate.supported.map(String.init).joined(separator: ", "))
+            return 2
+        }
+        var configuration = ReportRateKeeper.Configuration(hz: hz)
+        if let text = args.value("rate-interval") {
+            guard let interval = parseDuration(text) else {
+                complain("bad --rate-interval \"\(text)\"")
+                return 2
+            }
+            configuration.interval = interval
+        }
+
+        let keeper = ReportRateKeeper(configuration: configuration) { event in
+            switch event {
+            case .checked(let hz):
+                log.detail("rate       \(hz) Hz, as set")
+            case .corrected(let from, let to):
+                log.note("rate       was \(from) Hz, set back to \(to) Hz")
+            case .unreachable:
+                log.note("rate       mouse not reachable; will retry")
+            case .failed(let message):
+                log.note("rate       FAILED: \(message)")
+            }
+        }
+        do {
+            try keeper.start()
+        } catch {
+            log.note("FAILED to watch for the receiver (rate): \(error); timer only")
+        }
+        rateKeeper = keeper
+        log.note("rate       holding \(hz) Hz, re-checked every \(brief(configuration.interval)) "
+            + "and on connect/wake")
+    } else if args.value("rate-interval") != nil {
+        complain("--rate-interval needs --rate")
+        return 2
+    }
+    _ = rateKeeper  // held for the process lifetime
+
     installSignalHandlers {
         print("\(stamp(Date())) stopping")
         service.stop()
@@ -342,6 +426,12 @@ private final class DaemonLog {
     /// Prints a line from outside the sync service, on the same log.
     func note(_ message: String) {
         emit("\(stamp(Date())) \(message)")
+    }
+
+    /// Like ``note(_:)``, but only with `-v`: for routine confirmations that
+    /// would otherwise fill the log with identical lines.
+    func detail(_ message: String) {
+        if verbose { note(message) }
     }
 
     func report(_ event: ClockSyncService.Event) {

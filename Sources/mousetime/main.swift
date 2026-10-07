@@ -24,7 +24,10 @@ Usage:
   mousetime daemon [--interval 30s]   keep it synced; this is what launchd runs
                                         [--settle 2.5s] [--all] [-v] [--suppress]
                                         [--battery] [--battery-thresholds 20,10,5]
+                                        [--rate 1000] [--rate-interval 5m]
   mousetime battery [-v]              read the mouse battery level
+  mousetime rate [hz]                 read the mouse report rate, or set it
+                                      (8000, 4000, 2000, 1000, 500, 250, 125)
                     [--test-notification]
   mousetime suppress [--dry-run]      silence the receiver interface that emits
                      [--status]        input nobody asked for
@@ -40,6 +43,9 @@ Options:
   --dock      (list) only the 2.4G receiver dock
   -v          (sync) report every interface tried, and why it refused
               (daemon) log every periodic sync instead of summarising them
+  --rate      (daemon) hold the mouse at this report rate. The receiver
+              forgets it when unplugged; 8000 Hz can stutter behind a busy
+              USB hub, and 1000 Hz fixes that.
 
 Why the short interval: the dock forgets the time within a few minutes -- most
 likely when the mouse's radio link drops as it sleeps -- and it does so without
@@ -71,6 +77,7 @@ case "sync":
 case "daemon":
     status = runDaemon(Arguments(rest, valueOptions: [
         "interval", "settle", "battery-interval", "battery-thresholds",
+        "rate", "rate-interval",
     ]))
 
 case "suppress":
@@ -78,6 +85,9 @@ case "suppress":
 
 case "battery":
     status = runBattery(Arguments(rest))
+
+case "rate":
+    status = runRate(Arguments(rest))
 
 case "version", "--version", "-v":
     print("mousetime \(version)")

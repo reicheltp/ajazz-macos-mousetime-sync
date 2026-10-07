@@ -171,10 +171,11 @@ both isochronous, both holding reserved bandwidth.
   than the traffic, and predicted the rate setting would not help. It did. The
   reservation theory was wrong.
 
-**It is not a permanent fix.** The dock does not keep the setting — after
-unplugging and replugging, it read back as 500 Hz rather than the 1000 Hz that
-had been set. Re-pushing it on connect, the way the clock is handled, is
-[issue #3](../../issues/3), and needs the rate command reverse-engineered first.
+**It is not a permanent fix on its own.** The setting does not survive the
+receiver being unplugged — after a replug it read back as 500 Hz rather than the
+1000 Hz that had been set, and was measured at 500 Hz again weeks later. So
+`mousetime daemon --rate 1000` re-applies it on connect, after wake, and on a
+five-minute check; see [Setting the report rate](#setting-the-report-rate).
 
 ## Reading battery and identity
 
@@ -222,13 +223,63 @@ warning fired on a stale zero would be worse than none.
 flag there instead. A generic "the reply always echoes the command" check looks
 right and rejects every status read.
 
-An observed identify: `f1 df 06` → device ID 1759 (`0x06df`). AJAZZ's driver
-resolves that ID to a device class which then determines the *settings* command
-set — which is why report rate and DPI are not implemented here: the table
-mapping IDs to classes has not been located, and there are two mutually
-incompatible rate encodings in the bundle. Reads are proven; writes to this
-channel are where profile and firmware commands also live, so they are not
-guessed at.
+An observed identify: `f1 df 06` → device ID 1759 (`0x06df`). That is the
+**receiver's** ID, not the mouse's — `common_dangle`, "APEX", in the table
+described below. The mouse has its own, read through the relay with `0x8f`.
+
+## Setting the report rate
+
+Confirmed against the hardware: read, written, read back, and the change
+measured as input reports per second.
+
+**Where the encoding came from.** The device table is not in `qmk.top`'s main
+bundle. Devices missing from it are flagged "V4" and handed to a second driver
+at `qmk.top/v4/`, whose table has both halves of this hardware: the receiver
+(ID 1759, `common_dangle`) and the AJ159 APEX as several
+`mouse_pan1080_g62_*` entries. Every one of those classes inherits its settings
+code unchanged from `CommonMsPan1080`, so which exact variant a given unit is
+does not matter here. That class settles the "two encodings" question:
+
+| Rate | Code |
+|---|---|
+| 8000 | `0x81` |
+| 4000 | `0x82` |
+| 2000 | `0x84` |
+| 1000 | `0x01` |
+| 500 | `0x02` |
+| 250 | `0x04` |
+| 125 | `0x08` |
+
+The other encoding (`0`–`6`, 1000 Hz = `3`) belongs to other device families.
+
+**Talking to the mouse, not the receiver.** Settings live in the mouse, so
+commands go over the radio. The receiver relays what it is given while the
+mouse is selected, gated by the status flags that looked useless for battery:
+
+```
+f6 05        select the mouse
+f7 → [5]     "can send" — poll until 1 (byte 6 = 2 or 3: flags are about the mouse)
+<command>    sent as the feature report
+f7 → [0]     "can read" — poll until 1
+fc           fetch
+GetReport    the mouse's reply
+```
+
+Commands carry a checksum in byte 7: bytes 0–7 sum to `0xff`. So `d3` goes out
+as `d3 00 00 00 00 00 00 2c`, and the mouse echoes that header back.
+
+**The settings block.** `0xd3` reads a 64-byte block; `0x53` writes the same
+layout back. Byte 8 is the active profile, byte 9 the rate code; the rest is
+debounce, lighting, sleep timers and sensor options. There is also a narrow
+`04 <profile> <code>` command in the class, but AJAZZ's UI never uses it for
+this mouse — it rewrites the whole block — so neither does `mousetime`. The
+write is the block as read, with byte 0 = `53`, byte 9 = the new code, bytes 1–6
+and 11 zero, bytes 17–18 = `ff 08` (the vendor always sends these; this
+firmware reads them back as `00 00`), and a fresh checksum. A read-back after
+the write differed from the read before it in byte 9 only.
+
+Only the **active profile** is changed. The daemon re-reads before every write,
+so it follows a profile switch.
 
 ## Why it re-sends every 30 seconds
 
@@ -372,13 +423,12 @@ this is the next thing to try.
 
 Known to be possible on this hardware, absent here:
 
-- **Battery level.** Reportedly a query with opcode `0x20`, sub-command `0x01`,
-  answered via `GET_FEATURE` into a 65-byte buffer. Unverified.
 - **Uploading images and GIFs to the display.** The Windows software does this.
   The `aks075-linux` project does it for an AJAZZ *keyboard* screen, which may
   or may not use a related command set.
-- **DPI, polling rate, button mapping, RGB.** All handled by the Windows
-  software; none of it examined here.
+- **DPI, button mapping, RGB.** All handled by the Windows software. DPI sits
+  next to the rate in the same driver class (`0x54`/`0xd4`, "option param 1")
+  and could be done the same way; not examined beyond that.
 
 ## Code map
 
@@ -389,6 +439,7 @@ Known to be possible on this hardware, absent here:
 | `Sources/MouseTimeKit/ClockSync.swift` | opening the interface, sending the report |
 | `Sources/MouseTimeKit/DockMonitor.swift` | `IOServiceAddMatchingNotification` hotplug |
 | `Sources/MouseTimeKit/ClockSyncService.swift` | the sync triggers and debounce |
+| `Sources/MouseTimeKit/ReportRate.swift` | rate encoding, radio relay, settings block, re-apply loop |
 | `Sources/MouseTimeKit/HIDUsage.swift` | usage-page/usage names for legible output |
 | `Sources/mousetime/` | the CLI, thin over the above |
 
