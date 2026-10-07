@@ -441,7 +441,11 @@ Known to be possible on this hardware, absent here:
 | `Sources/MouseTimeKit/ClockSyncService.swift` | the sync triggers and debounce |
 | `Sources/MouseTimeKit/ReportRate.swift` | rate encoding, radio relay, settings block, re-apply loop |
 | `Sources/MouseTimeKit/HIDUsage.swift` | usage-page/usage names for legible output |
+| `Sources/MouseTimeKit/RunLoopScheduler.swift` | keeps each service's hardware work on its own run loop |
 | `Sources/mousetime/` | the CLI, thin over the above |
+| `Sources/MouseTimeBar/` | the menu bar app: the same services on a dedicated hardware thread |
 
-The logic lives in `MouseTimeKit` and the CLI is a thin layer, so a menu bar app
-could be added without restructuring.
+The logic lives in `MouseTimeKit`; the CLI and the menu bar app are thin layers
+over it. Every exchange with the receiver is a multi-step sequence, so each
+process drives it from exactly one thread, and the app refuses to run alongside
+the launchd daemon or a second copy of itself.

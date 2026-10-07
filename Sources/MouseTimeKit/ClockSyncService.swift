@@ -81,6 +81,8 @@ public final class ClockSyncService: @unchecked Sendable {
     private var observers: [NSObjectProtocol] = []
     private var lastSuccess: Date?
     private var isInitialScan = false
+    /// The run loop ``start()`` was called on; all work happens there.
+    private var scheduler = RunLoopScheduler.current
 
     /// - Parameters:
     ///   - predicate: which interfaces to send the clock report to. The default
@@ -102,6 +104,8 @@ public final class ClockSyncService: @unchecked Sendable {
     /// Installs all triggers. The caller is responsible for running the run
     /// loop afterwards.
     public func start() {
+        scheduler = .current
+
         // Watch for any AJAZZ interface, not just the control one: the
         // interfaces of a single receiver do not appear in a guaranteed order,
         // and noticing the receiver at all is the signal we want.
@@ -124,12 +128,9 @@ public final class ClockSyncService: @unchecked Sendable {
         observe(NotificationCenter.default, .NSSystemClockDidChange, .clockChange)
         observe(NotificationCenter.default, .NSSystemTimeZoneDidChange, .clockChange)
 
-        let timer = Timer(timeInterval: configuration.interval, repeats: true) {
-            [weak self] _ in
+        timer = scheduler.every(configuration.interval) { [weak self] in
             self?.sync(reason: .periodic)
         }
-        RunLoop.current.add(timer, forMode: .default)
-        self.timer = timer
     }
 
     /// Removes all triggers.
@@ -154,9 +155,13 @@ public final class ClockSyncService: @unchecked Sendable {
     private func observe(
         _ center: NotificationCenter, _ name: Notification.Name, _ reason: Reason
     ) {
+        // Notifications arrive on whichever thread posted them; hop back to
+        // this service's run loop before touching the hardware.
+        let scheduler = self.scheduler
         let observer = center.addObserver(forName: name, object: nil, queue: nil) {
             [weak self] _ in
-            self?.sync(reason: reason)
+            guard let self else { return }
+            scheduler.after(0) { [weak self] in self?.sync(reason: reason) }
         }
         observers.append(observer)
     }
@@ -177,7 +182,7 @@ public final class ClockSyncService: @unchecked Sendable {
             _ = perform(reason: reason, respectDebounce: true)
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+        scheduler.after(wait) { [weak self] in
             _ = self?.perform(reason: reason, respectDebounce: true)
         }
     }

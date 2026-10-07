@@ -25,6 +25,16 @@ let package = Package(
             name: "mousetime",
             dependencies: ["MouseTimeKit"]
         ),
+        // The menu bar app. SwiftPM builds the executable; scripts/build-app.sh
+        // wraps it in the .app bundle that notifications and login items need.
+        .executableTarget(
+            name: "MouseTimeBar",
+            dependencies: ["MouseTimeKit"],
+            linkerSettings: [
+                .linkedFramework("ServiceManagement"),
+                .linkedFramework("UserNotifications"),
+            ]
+        ),
         .testTarget(
             name: "MouseTimeKitTests",
             dependencies: ["MouseTimeKit"]

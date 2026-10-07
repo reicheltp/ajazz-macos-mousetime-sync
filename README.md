@@ -63,6 +63,23 @@ tail -f ~/Library/Logs/mousetime.log   # see what it is doing
 ./launchd/install.sh uninstall         # remove it completely
 ```
 
+### Or the menu bar app
+
+`MouseTime.app` does everything the background service does, and shows the
+mouse battery, the report rate and the last clock sync in the menu bar, with the
+settings as menu items instead of flags:
+
+```sh
+./scripts/build-app.sh --install
+```
+
+It replaces the launchd service rather than running beside it — two processes
+talking to the receiver at once could interleave their commands — so the
+script carries the service's flags over and removes it. The app starts at login
+(switchable in its menu), and its battery warnings are real notifications, which
+the command-line tool cannot deliver reliably ([#1](../../issues/1)). Unsigned
+like the rest, so build-from-source only for now.
+
 ### Why no permission prompt?
 
 Because it never touches your mouse or your keyboard. Comparable tools ask for

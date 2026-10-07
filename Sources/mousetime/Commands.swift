@@ -375,7 +375,9 @@ func runDaemon(_ args: Arguments) -> Int32 {
             case .corrected(let from, let to):
                 log.note("rate       was \(from) Hz, set back to \(to) Hz")
             case .unreachable:
-                log.note("rate       mouse not reachable; will retry")
+                // The mouse sleeps whenever it is left alone, so this is the
+                // normal state for most of the day, not something to report.
+                log.detail("rate       mouse not reachable; will retry")
             case .failed(let message):
                 log.note("rate       FAILED: \(message)")
             }

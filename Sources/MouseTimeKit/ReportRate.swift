@@ -242,7 +242,7 @@ public enum ReportRateControl {
     }
 }
 
-/// Keeps the report rate where it was set.
+/// Keeps the report rate where it was set — or, with no target, just watches it.
 ///
 /// The setting does not survive the receiver being unplugged — it came back as
 /// 500 Hz after a replug that followed setting 1000 Hz — so, like the clock, it
@@ -251,18 +251,22 @@ public enum ReportRateControl {
 /// write happens only when the rate has actually drifted.
 ///
 /// `@unchecked Sendable` for the same reason as the other monitors: all state is
-/// touched only from the run loop ``start()`` was called on.
+/// touched only from the run loop ``start()`` was called on. Callers on other
+/// threads go through ``setTarget(_:)`` and ``checkSoon()``, which hop there.
 public final class ReportRateKeeper: @unchecked Sendable {
     public enum Event: Sendable {
+        /// The rate as read; matches the target if there is one.
         case checked(Int)
         case corrected(from: Int, to: Int)
-        /// The mouse could not be reached; a retry is scheduled.
+        /// The mouse could not be reached — usually asleep. A retry is
+        /// scheduled. Routine, not an error.
         case unreachable
         case failed(String)
     }
 
     public struct Configuration: Sendable {
-        public var hz: Int
+        /// The rate to hold, or `nil` to only read it.
+        public var hz: Int?
         /// How often to re-check when nothing else prompts it.
         public var interval: TimeInterval
         /// Delay after the receiver appears. Longer than the clock's settle:
@@ -272,7 +276,7 @@ public final class ReportRateKeeper: @unchecked Sendable {
         public var retryInterval: TimeInterval
 
         public init(
-            hz: Int, interval: TimeInterval = 300, settle: TimeInterval = 5,
+            hz: Int?, interval: TimeInterval = 300, settle: TimeInterval = 5,
             retryInterval: TimeInterval = 30
         ) {
             self.hz = hz
@@ -282,7 +286,7 @@ public final class ReportRateKeeper: @unchecked Sendable {
         }
     }
 
-    private let configuration: Configuration
+    private var configuration: Configuration
     private let predicate: (DeviceInfo) -> Bool
     private let emit: (Event) -> Void
     private var monitor: DockMonitor?
@@ -290,6 +294,7 @@ public final class ReportRateKeeper: @unchecked Sendable {
     private var retryTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
     private var isInitialScan = false
+    private var scheduler = RunLoopScheduler.current
 
     public init(
         configuration: Configuration,
@@ -306,21 +311,25 @@ public final class ReportRateKeeper: @unchecked Sendable {
     /// Installs the triggers and checks once. Throws only if the device
     /// monitor cannot start; the timer still runs in that case.
     public func start() throws {
-        let timer = Timer(timeInterval: configuration.interval, repeats: true) { [weak self] _ in
-            self?.check()
-        }
-        RunLoop.current.add(timer, forMode: .default)
-        self.timer = timer
+        scheduler = .current
+        timer = scheduler.every(configuration.interval) { [weak self] in self?.check() }
 
+        let scheduler = self.scheduler
+        let settle = configuration.settle
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
-        ) { [weak self] _ in self?.check(after: self?.configuration.settle ?? 0) }
+        ) { [weak self] _ in
+            guard let self else { return }
+            scheduler.after(settle) { [weak self] in self?.check() }
+        }
 
         let monitor = DockMonitor(matching: predicate) { [weak self] _ in
             guard let self else { return }
             // The control interface already being there at startup is not a
             // connect; check right away rather than waiting out the settle.
-            self.check(after: self.isInitialScan ? 0 : self.configuration.settle)
+            self.scheduler.after(self.isInitialScan ? 0 : self.configuration.settle) {
+                [weak self] in self?.check()
+            }
         }
         self.monitor = monitor
         isInitialScan = true
@@ -339,18 +348,32 @@ public final class ReportRateKeeper: @unchecked Sendable {
         monitor = nil
     }
 
-    private func check(after delay: TimeInterval) {
-        guard delay > 0 else { return check() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.check() }
+    /// Changes the rate to hold (or stops holding one) and checks right away.
+    /// Safe from any thread.
+    public func setTarget(_ hz: Int?) {
+        scheduler.after(0) { [weak self] in
+            self?.configuration.hz = hz
+            self?.check()
+        }
     }
 
-    /// Reads once, correcting if needed.
+    /// Checks on the keeper's own run loop. Safe from any thread.
+    public func checkSoon() {
+        scheduler.after(0) { [weak self] in self?.check() }
+    }
+
+    /// Reads once, correcting if a target is set. Must be called on the run
+    /// loop ``start()`` was called on; elsewhere, use ``checkSoon()``.
     public func check() {
         guard let device = ReportRateControl.firstControlInterface(matching: predicate) else {
             return  // receiver not attached; its appearance will trigger a check
         }
         do {
-            switch try ReportRateControl.ensure(configuration.hz, on: device) {
+            guard let hz = configuration.hz else {
+                emit(.checked(try ReportRateControl.read(from: device)))
+                return
+            }
+            switch try ReportRateControl.ensure(hz, on: device) {
             case .unchanged(let hz):
                 emit(.checked(hz))
             case .changed(let from, let to):
@@ -367,10 +390,6 @@ public final class ReportRateKeeper: @unchecked Sendable {
 
     private func scheduleRetry() {
         retryTimer?.invalidate()
-        let timer = Timer(timeInterval: configuration.retryInterval, repeats: false) {
-            [weak self] _ in self?.check()
-        }
-        RunLoop.current.add(timer, forMode: .default)
-        retryTimer = timer
+        retryTimer = scheduler.after(configuration.retryInterval) { [weak self] in self?.check() }
     }
 }

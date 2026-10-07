@@ -104,6 +104,7 @@ public final class BatteryMonitor: @unchecked Sendable {
     private var alarm: BatteryAlarm
     private var timer: Timer?
     private var retryTimer: Timer?
+    private var scheduler = RunLoopScheduler.current
 
     public init(
         configuration: Configuration = Configuration(),
@@ -120,12 +121,9 @@ public final class BatteryMonitor: @unchecked Sendable {
 
     /// Starts polling on the current run loop, checking once immediately.
     public func start() {
+        scheduler = .current
         poll()
-        let timer = Timer(timeInterval: configuration.interval, repeats: true) { [weak self] _ in
-            self?.poll()
-        }
-        RunLoop.current.add(timer, forMode: .default)
-        self.timer = timer
+        timer = scheduler.every(configuration.interval) { [weak self] in self?.poll() }
     }
 
     public func stop() {
@@ -139,12 +137,7 @@ public final class BatteryMonitor: @unchecked Sendable {
     /// unusable readings cannot pile up timers.
     private func scheduleRetry() {
         retryTimer?.invalidate()
-        let timer = Timer(timeInterval: configuration.retryInterval, repeats: false) {
-            [weak self] _ in
-            self?.poll()
-        }
-        RunLoop.current.add(timer, forMode: .default)
-        retryTimer = timer
+        retryTimer = scheduler.after(configuration.retryInterval) { [weak self] in self?.poll() }
     }
 
     /// Forgets warning state, so a reconnected device with a low battery warns
