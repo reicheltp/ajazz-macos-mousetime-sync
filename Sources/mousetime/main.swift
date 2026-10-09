@@ -8,7 +8,7 @@ import Foundation
 // observability is its log file must not sit on output for 4 KB at a time.
 setvbuf(stdout, nil, _IOLBF, 0)
 
-let version = "0.1.0"
+let version = "0.2.0"
 
 let usage = """
 mousetime \(version) — AJAZZ AJ159 APEX dock support for macOS
