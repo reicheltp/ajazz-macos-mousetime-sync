@@ -278,31 +278,29 @@ func runDaemon(_ args: Arguments) -> Int32 {
     service.start()
 
     // Suppression rides along with the daemon because the mapping is attached
-    // to a live HID service: unplugging the dock or rebooting drops it, and
-    // something has to notice the interface coming back. Kept on its own
-    // monitor rather than folded into ClockSyncService — different interface,
-    // different concern.
-    var suppressionMonitor: DockMonitor?
+    // to a live HID service and does not stay put: unplugging the dock or
+    // rebooting drops it, and so, silently, can a wake. Kept apart from
+    // ClockSyncService — different interface, different concern.
+    var suppressionKeeper: SuppressionKeeper?
     if args.has("suppress") {
-        let monitor = DockMonitor(
-            matching: \.isPhantomInputCandidate,
-            onAppear: { device in
-                do {
-                    let count = try PhantomInputSuppressor.apply(to: device)
-                    log.note("suppressed \(count) usages on \(device)")
-                } catch {
-                    log.note("FAILED to suppress \(device): \(error)")
-                }
+        let keeper = SuppressionKeeper { event in
+            switch event {
+            case .applied(let device, let count):
+                log.note("suppressed \(count) usages on \(device)")
+            case .restored(let device, let found, let count):
+                log.note("suppression had dropped to \(found) usages on \(device); restored \(count)")
+            case .failed(let device, let message):
+                log.note("FAILED to suppress \(device): \(message)")
             }
-        )
-        do {
-            try monitor.start()
-            suppressionMonitor = monitor
-        } catch {
-            log.note("FAILED to watch for the phantom-input interface: \(error)")
         }
+        do {
+            try keeper.start()
+        } catch {
+            log.note("FAILED to watch for the phantom-input interface: \(error); timer only")
+        }
+        suppressionKeeper = keeper
     }
-    _ = suppressionMonitor  // held for the process lifetime
+    _ = suppressionKeeper  // held for the process lifetime
 
     // Battery warnings. Opt-in for the same reason as suppression: it polls the
     // radio, and not every user wants notifications.

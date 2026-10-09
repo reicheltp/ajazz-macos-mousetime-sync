@@ -23,9 +23,12 @@ import Foundation
 /// Two known limits, both documented rather than worked around:
 ///
 /// - The mapping is **not persistent**. It is attached to a live HID service, so
-///   unplugging the dock or rebooting clears it. ``ClockSyncService`` reapplies
-///   it when the interface reappears, which is why suppression rides along with
-///   the daemon rather than being a one-shot command.
+///   unplugging the dock or rebooting clears it. Worse, the event system can
+///   drop it from the *active* filter while the stored property still holds
+///   every entry — observed after waking from sleep, with the same service and
+///   no re-enumeration. ``SuppressionKeeper`` therefore checks the active filter
+///   and reapplies, which is why suppression rides along with the daemon rather
+///   than being a one-shot command.
 /// - Whether a usage mapped to zero is *discarded* rather than passed through is
 ///   not something this code can prove. The mapping is verifiably present in the
 ///   event system's active filter, which is as far as observation goes without
@@ -112,7 +115,10 @@ public enum PhantomInputSuppressor {
             + #""PrimaryUsage":\#(device.primaryUsage)}"#
     }
 
-    /// Silences `device`, then reads the mapping back to confirm it took.
+    /// Silences `device`, then reads the active filter back to confirm it took.
+    ///
+    /// Setting a mapping identical to the stored one is not a no-op: it is what
+    /// repopulates a filter that lost it.
     ///
     /// - Returns: the number of usages now mapped to nothing.
     @discardableResult
@@ -136,15 +142,59 @@ public enum PhantomInputSuppressor {
         ])
     }
 
-    /// How many usages are currently mapped on `device`.
+    /// How many usages are mapped to nothing in the filter that actually
+    /// processes `device`'s events.
+    ///
+    /// Deliberately not the stored `UserKeyMapping` property: after a wake the
+    /// property kept all 1088 entries while the keyboard filter held none, and
+    /// keystrokes came through. The filter is what decides.
     public static func appliedCount(for device: DeviceInfo) throws -> Int {
-        let output = try hidutil([
+        let property = try hidutil([
             "property", "--matching", matching(device), "--get", "UserKeyMapping",
         ])
-        // hidutil prints the property as a plist-ish blob; counting the source
-        // keys is more robust than trying to parse its formatting.
-        return output.components(separatedBy: "HIDKeyboardModifierMappingSrc").count - 1
+        let services = eventServiceIDs(inPropertyOutput: property)
+        guard !services.isEmpty else { return 0 }
+        let dump = try hidutil(["dump", "services", "-f", "xml"])
+        return activeMappingCount(inServiceDump: Data(dump.utf8), services: services)
     }
+
+    /// The registry IDs of the event services hidutil matched, from the first
+    /// column of `hidutil property --get`.
+    ///
+    /// These are the event services, not the `IOHIDDevice` entries
+    /// ``DeviceInfo`` describes — the dump is keyed by the former.
+    static func eventServiceIDs(inPropertyOutput output: String) -> Set<UInt64> {
+        var ids: Set<UInt64> = []
+        for line in output.split(separator: "\n") {
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard fields.count >= 2, fields[1] == "UserKeyMapping",
+                  let id = UInt64(fields[0], radix: 16) else { continue }
+            ids.insert(id)
+        }
+        return ids
+    }
+
+    /// Entries in the keyboard filter's `UserKeyMapping` across `services`, as
+    /// reported by `hidutil dump services -f xml`.
+    static func activeMappingCount(inServiceDump data: Data, services: Set<UInt64>) -> Int {
+        guard let root = try? PropertyListSerialization.propertyList(from: data, format: nil)
+                as? [String: Any],
+              let records = root["ServiceRecords"] as? [[String: Any]] else { return 0 }
+        var count = 0
+        for record in records {
+            guard let id = (record["IORegistryEntryID"] as? NSNumber)?.uint64Value,
+                  services.contains(id),
+                  let filters = record["ServiceFilterDebug"] as? [[String: Any]] else { continue }
+            for filter in filters where filter["name"] as? String == keyboardFilter {
+                let plugin = filter["plugin"] as? [String: Any]
+                count += (plugin?["UserKeyMapping"] as? [Any])?.count ?? 0
+            }
+        }
+        return count
+    }
+
+    /// The event-system filter that applies `UserKeyMapping`.
+    static let keyboardFilter = "com.apple.iokit.hid.IOHIDKeyboardFilter"
 
     private static func hidutil(_ arguments: [String]) throws -> String {
         let process = Process()

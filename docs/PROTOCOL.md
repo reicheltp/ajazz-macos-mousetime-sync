@@ -408,6 +408,30 @@ dock or rebooting. `mousetime daemon --suppress` watches for the interface with
 the same `IOServiceAddMatchingNotification` machinery the clock uses and reapplies
 it on arrival.
 
+### It also falls out after sleep
+
+Arrival is not the only way to lose it. After a wake, with suppression applied
+and the service unchanged — same registry ID, no re-enumeration, so no arrival
+notification — stray keystrokes (`ƒ8„„„„„„„„„„`) came through again. At that
+point:
+
+- `hidutil property --get UserKeyMapping` still listed all 1088 entries;
+- the `IOHIDKeyboardFilter` for that service in `hidutil dump services` held
+  **none**;
+- the same service's `EventTypeCounts` showed keyboard events — confirming this
+  interface as the source.
+
+So the stored property and the active filter do disagree, as suspected above,
+and the stored property is the one that lies. Setting the identical mapping again
+repopulated the filter with all 1088 entries.
+
+Two consequences in the code: `mousetime suppress --status` and the check after
+`apply` count entries in the active keyboard filter, not the property; and the
+daemon and the menu bar app check that count after every system or display wake
+(at 1, 5, 15 and 45 seconds — when exactly the filters are rebuilt is not known)
+and once a minute otherwise, and reapply when it is short. The log says so when
+that happens: `suppression had dropped to 0 usages … restored 1088`.
+
 ### The alternative, not taken
 
 `IOHIDDeviceOpen` with `kIOHIDOptionsTypeSeizeDevice` claims an interface

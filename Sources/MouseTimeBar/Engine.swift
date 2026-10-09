@@ -36,7 +36,7 @@ final class Engine: @unchecked Sendable {
     private var clock: ClockSyncService?
     private var battery: BatteryMonitor?
     private var rate: ReportRateKeeper?
-    private var suppression: DockMonitor?
+    private var suppression: SuppressionKeeper?
     private var docks: Set<UInt64> = []
 
     init(publish: @escaping @Sendable (Update) -> Void) {
@@ -138,22 +138,26 @@ final class Engine: @unchecked Sendable {
         }
     }
 
+    private func handle(_ event: SuppressionKeeper.Event) {
+        switch event {
+        case .applied(let device, let count):
+            publish(.log("suppressed \(count) usages on \(device)"))
+        case .restored(let device, let found, let count):
+            publish(.log("suppression had dropped to \(found) usages on \(device); restored \(count)"))
+        case .failed(let device, let message):
+            publish(.log("FAILED to suppress \(device): \(message)"))
+        }
+    }
+
     private func startSuppression() {
         guard suppression == nil else { return }
-        let monitor = DockMonitor(matching: \.isPhantomInputCandidate) { [weak self] device in
-            do {
-                let count = try PhantomInputSuppressor.apply(to: device)
-                self?.publish(.log("suppressed \(count) usages on \(device)"))
-            } catch {
-                self?.publish(.log("FAILED to suppress \(device): \(error)"))
-            }
-        }
+        let keeper = SuppressionKeeper { [weak self] event in self?.handle(event) }
         do {
-            try monitor.start()
-            suppression = monitor
+            try keeper.start()
         } catch {
-            publish(.log("FAILED to watch for the phantom-input interface: \(error)"))
+            publish(.log("FAILED to watch for the phantom-input interface: \(error); timer only"))
         }
+        suppression = keeper
     }
 
     private func stopSuppression() {

@@ -82,6 +82,51 @@ struct PhantomInputSuppressorTests {
         #expect(json.contains("\"VendorID\":12625"))
         #expect(json.contains("\"ProductID\":20487"))
     }
+
+    @Test("reads the event-service IDs hidutil matched")
+    func parsesPropertyOutput() {
+        // Abridged from a real `hidutil property --get UserKeyMapping`.
+        let output = """
+            RegistryID  Key                   Value
+            10003db24   UserKeyMapping   (
+                    {
+                    HIDKeyboardModifierMappingDst = 0;
+                    HIDKeyboardModifierMappingSrc = 51539607552;
+                }
+            )
+            """
+        #expect(PhantomInputSuppressor.eventServiceIDs(inPropertyOutput: output) == [0x10003db24])
+    }
+
+    @Test("counts only the keyboard filter of the matched service")
+    func countsActiveFilter() throws {
+        // The case that let keystrokes through: stored property full, active
+        // filter empty. Another service with a mapping must not count either.
+        func record(_ id: UInt64, keyboardEntries: Int) -> [String: Any] {
+            let entry: [String: Any] = ["Src": 0x700000004, "Dst": 0]
+            return [
+                "IORegistryEntryID": NSNumber(value: id),
+                "ServiceFilterDebug": [
+                    ["name": PhantomInputSuppressor.keyboardFilter,
+                     "plugin": ["UserKeyMapping": Array(repeating: entry, count: keyboardEntries)]],
+                    ["name": "com.apple.iokit.hid.IOHIDEventProcessorFilter",
+                     "plugin": ["UserKeyMapping": [entry]]],
+                ],
+            ]
+        }
+        func dump(_ records: [[String: Any]]) throws -> Data {
+            try PropertyListSerialization.data(
+                fromPropertyList: ["ServiceRecords": records], format: .xml, options: 0)
+        }
+
+        let lost = try dump([record(0x10003db24, keyboardEntries: 0), record(7, keyboardEntries: 5)])
+        #expect(PhantomInputSuppressor.activeMappingCount(inServiceDump: lost, services: [0x10003db24]) == 0)
+
+        let held = try dump([record(0x10003db24, keyboardEntries: 1088)])
+        #expect(PhantomInputSuppressor.activeMappingCount(inServiceDump: held, services: [0x10003db24]) == 1088)
+
+        #expect(PhantomInputSuppressor.activeMappingCount(inServiceDump: Data("junk".utf8), services: [1]) == 0)
+    }
 }
 
 @Suite("Which interface gets suppressed")
